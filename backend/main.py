@@ -64,7 +64,7 @@ app.include_router(
         registry=cp_registry,
         command_service=command_service,
     ),
-    prefix="/api",
+    prefix="/api/v1",
     tags=["RPC – Charge Point"],
 )
 
