@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+websockets          # FastAPI WS-server
+pydantic            # dataclass-achtig, maar met validatie
+ocpp                # voor v1.6 & v2.0.1 parsing
+influxdb-client     
