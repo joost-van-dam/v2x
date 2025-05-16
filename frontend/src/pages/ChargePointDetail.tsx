@@ -1,7 +1,11 @@
 import { useParams, Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { fetchConfiguration, remoteStart, remoteStop } from "../api";
-import type { ConfigKey } from "../api";
+import {
+  fetchConfiguration,
+  remoteStart,
+  remoteStop,
+} from "../api";
+import type { ConfigKey } from "../ui/ConfigTable";
 import ConfigTable from "../ui/ConfigTable";
 import useBackendWs from "../hooks/useBackendWs";
 
@@ -16,13 +20,9 @@ interface SampleRow {
   transactionId?: number;
 }
 
-/**
- * Zet het (v1.6 of v2.0.1) MeterValues-payload om naar platte rijen.
- */
 function unravelMeterValues(payload: any): SampleRow[] {
   if (!payload) return [];
-
-  // ---------------- OCPP 1.6  ----------------
+  /* ---------- OCPP 1.6 ---------- */
   if (Array.isArray(payload.meter_value)) {
     const txId = payload.transaction_id ?? payload.transactionId;
     return payload.meter_value.flatMap((mvObj: any) =>
@@ -37,14 +37,12 @@ function unravelMeterValues(payload: any): SampleRow[] {
       }))
     );
   }
-
-  // ---------------- OCPP 2.0.1  ----------------
+  /* ---------- OCPP 2.0.1 ---------- */
   if (Array.isArray(payload.evse)) {
-    // v2.0.1 heeft andere structuur → gebruik evse[*].connector[*].sampledValue
     const rows: SampleRow[] = [];
     payload.evse.forEach((ev: any) => {
-      ev.connector?.forEach((con: any) => {
-        con.sampledValue?.forEach((sv: any) => {
+      ev.connector?.forEach((con: any) =>
+        con.sampledValue?.forEach((sv: any) =>
           rows.push({
             timestamp: sv.timeStamp ?? sv.timestamp ?? "",
             measurand: sv.measurand ?? "",
@@ -52,18 +50,15 @@ function unravelMeterValues(payload: any): SampleRow[] {
             value: sv.value ?? "",
             unit: sv.unit ?? "",
             context: sv.context ?? "",
-          });
-        });
-      });
+          })
+        )
+      );
     });
     return rows;
   }
-
   return [];
 }
 
-/* ====================================================================== */
-/*                           COMPONENT                                    */
 /* ====================================================================== */
 export default function ChargePointDetail() {
   const { id = "" } = useParams();
@@ -71,7 +66,7 @@ export default function ChargePointDetail() {
   const [err, setErr] = useState<string>();
   const backendEvents = useBackendWs();
 
-  /* --------------------------- init config ---------------------------- */
+  /* ---------------- init config ---------------- */
   useEffect(() => {
     if (!id) return;
     fetchConfiguration(id)
@@ -79,7 +74,7 @@ export default function ChargePointDetail() {
       .catch((e) => setErr(String(e)));
   }, [id]);
 
-  /* --------------------------- helpers -------------------------------- */
+  /* -------------- helpers -------------- */
   async function handleStart() {
     try {
       await remoteStart(id);
@@ -88,7 +83,6 @@ export default function ChargePointDetail() {
       alert(e instanceof Error ? e.message : String(e));
     }
   }
-
   async function handleStop() {
     try {
       await remoteStop(id);
@@ -98,7 +92,32 @@ export default function ChargePointDetail() {
     }
   }
 
-  /* --------------------------- latest MV ------------------------------ */
+  /* ---- config change → /commands ---- */
+  async function handleConfigChange(key: string, value: string) {
+    try {
+      const r = await fetch(
+        `http://localhost:5062/api/v1/charge-points/${id}/commands`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "ChangeConfiguration",
+            parameters: { key, value },
+          }),
+        }
+      );
+      if (!r.ok) throw new Error(await r.text());
+      // update local state on success
+      setConfig((prev) =>
+        prev.map((c) => (c.key === key ? { ...c, value } : c))
+      );
+      alert("Config updated!");
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /* -------------- latest MV -------------- */
   const lastMv = useMemo(
     () =>
       backendEvents
@@ -107,12 +126,16 @@ export default function ChargePointDetail() {
     [backendEvents, id]
   );
 
-  const lastRows: SampleRow[] = useMemo(
-    () => unravelMeterValues(lastMv?.payload),
-    [lastMv]
-  );
+  const sortedRows: SampleRow[] = useMemo(() => {
+    const rows = unravelMeterValues(lastMv?.payload);
+    return rows.sort((a, b) => {
+      const m = a.measurand.localeCompare(b.measurand);
+      if (m !== 0) return m;
+      return a.phase.localeCompare(b.phase);
+    });
+  }, [lastMv]);
 
-  /* --------------------------- render --------------------------------- */
+  /* -------------- render -------------- */
   if (err) return <p style={{ color: "red" }}>{err}</p>;
 
   return (
@@ -123,7 +146,7 @@ export default function ChargePointDetail() {
       <button onClick={handleStop}>Stop</button>
 
       {/* -------- live MV table -------- */}
-      {lastRows.length > 0 && (
+      {sortedRows.length > 0 && (
         <>
           <h3 style={{ marginTop: "2rem" }}>Last MeterValues (live)</h3>
           <table
@@ -143,7 +166,7 @@ export default function ChargePointDetail() {
               </tr>
             </thead>
             <tbody>
-              {lastRows.map((row, i) => (
+              {sortedRows.map((row, i) => (
                 <tr key={i}>
                   <td>{row.measurand}</td>
                   <td>{row.phase}</td>
@@ -165,7 +188,11 @@ export default function ChargePointDetail() {
 
       {/* -------- configuration -------- */}
       <h3 style={{ marginTop: "2rem" }}>Configuration</h3>
-      <ConfigTable configKeys={config} />
+      <ConfigTable
+        cpId={id}
+        configKeys={config}
+        onConfigChange={handleConfigChange}
+      />
 
       {/* -------- raw log viewer -------- */}
       <h3 style={{ marginTop: "2rem" }}>WebSocket events (this CP)</h3>
