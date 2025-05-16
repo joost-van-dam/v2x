@@ -24,8 +24,9 @@ uvicorn main:app --host 0.0.0.0 --port 5062 --reload
 
 ## frontend
 
+oud
 npx create-react-app frontend --template typescript
 
-
-
+nieuw
+npm create vite@latest frontend -- --template react-ts
 
