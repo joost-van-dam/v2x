@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+from typing import Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -25,8 +25,7 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
 
         try:
             while True:
-                # front-end stuurt voorlopig niets
-                await ws.receive_text()
+                await ws.receive_text()  # FE stuurt (nog) niets terug
         except WebSocketDisconnect:
             log.info("Front-end %s disconnected", ws.id)
         finally:
@@ -41,10 +40,21 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
             except Exception:
                 await registry.deregister(fe)  # type: ignore[arg-type]
 
-    # ---------------------------------------------------------------- event-bridge
-    async def _on_meter_values(**payload):
-        await _broadcast({"event": "MeterValues", **payload})
+    # ---------------------------------------------------------------- EventBus-bridge
+    def _make_handler(evt_name: str) -> Callable[..., None]:
+        async def _handler(**payload):
+            await _broadcast({"event": evt_name, **payload})
+        return _handler
 
-    bus.subscribe("MeterValues", _on_meter_values)
+    for _evt in (
+        "MeterValues",
+        "Heartbeat",
+        "StatusNotification",
+        "StartTransaction",
+        "StopTransaction",
+        "BootNotification",
+        "Authorize",
+    ):
+        bus.subscribe(_evt, _make_handler(_evt))
 
     return r

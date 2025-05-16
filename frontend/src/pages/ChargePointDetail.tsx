@@ -8,8 +8,9 @@ import {
 import type { ConfigKey } from "../ui/ConfigTable";
 import ConfigTable from "../ui/ConfigTable";
 import useBackendWs from "../hooks/useBackendWs";
+import type { BackendEvent } from "../hooks/useBackendWs";   // ← type-only import!
 
-/* ------------------------------------------------- helpers / types ----- */
+/* ------------------------------------------------ helpers / types ------ */
 interface SampleRow {
   timestamp: string;
   measurand: string;
@@ -22,7 +23,7 @@ interface SampleRow {
 
 function unravelMeterValues(payload: any): SampleRow[] {
   if (!payload) return [];
-  /* ---------- OCPP 1.6 ---------- */
+  // ---------- OCPP 1.6 ----------
   if (Array.isArray(payload.meter_value)) {
     const txId = payload.transaction_id ?? payload.transactionId;
     return payload.meter_value.flatMap((mvObj: any) =>
@@ -37,10 +38,10 @@ function unravelMeterValues(payload: any): SampleRow[] {
       }))
     );
   }
-  /* ---------- OCPP 2.0.1 ---------- */
+  // ---------- OCPP 2.0.1 ----------
   if (Array.isArray(payload.evse)) {
     const rows: SampleRow[] = [];
-    payload.evse.forEach((ev: any) => {
+    payload.evse.forEach((ev: any) =>
       ev.connector?.forEach((con: any) =>
         con.sampledValue?.forEach((sv: any) =>
           rows.push({
@@ -52,11 +53,29 @@ function unravelMeterValues(payload: any): SampleRow[] {
             context: sv.context ?? "",
           })
         )
-      );
-    });
+      )
+    );
     return rows;
   }
   return [];
+}
+
+function describeEvent(ev: BackendEvent): string {
+  switch (ev.event) {
+    case "StatusNotification":
+      // @ts-ignore
+      return ev.payload?.status ?? JSON.stringify(ev.payload);
+    case "Heartbeat":
+      return new Date().toLocaleTimeString();
+    case "StartTransaction":
+      // @ts-ignore
+      return `txId=${ev.payload?.transaction_id ?? ev.payload?.transactionId ?? "?"}`;
+    case "StopTransaction":
+      // @ts-ignore
+      return `txId=${ev.payload?.transaction_id ?? ev.payload?.transactionId ?? "?"}`;
+    default:
+      return JSON.stringify(ev.payload);
+  }
 }
 
 /* ====================================================================== */
@@ -74,7 +93,7 @@ export default function ChargePointDetail() {
       .catch((e) => setErr(String(e)));
   }, [id]);
 
-  /* -------------- helpers -------------- */
+  /* -------------- helpers ---------------- */
   async function handleStart() {
     try {
       await remoteStart(id);
@@ -92,7 +111,6 @@ export default function ChargePointDetail() {
     }
   }
 
-  /* ---- config change → /commands ---- */
   async function handleConfigChange(key: string, value: string) {
     try {
       const r = await fetch(
@@ -107,7 +125,6 @@ export default function ChargePointDetail() {
         }
       );
       if (!r.ok) throw new Error(await r.text());
-      // update local state on success
       setConfig((prev) =>
         prev.map((c) => (c.key === key ? { ...c, value } : c))
       );
@@ -117,23 +134,23 @@ export default function ChargePointDetail() {
     }
   }
 
-  /* -------------- latest MV -------------- */
-  const lastMv = useMemo(
-    () =>
-      backendEvents
-        .filter((e) => e.event === "MeterValues" && e.charge_point_id === id)
-        .at(-1),
-    [backendEvents, id]
-  );
+  /* -------------- live event snapshots -------------- */
+  const cpEvents = backendEvents.filter((e) => e.charge_point_id === id);
+
+  const lastByType = useMemo(() => {
+    const m = new Map<string, BackendEvent>();
+    cpEvents.forEach((ev) => m.set(ev.event, ev));
+    return Array.from(m.values());
+  }, [cpEvents]);
 
   const sortedRows: SampleRow[] = useMemo(() => {
-    const rows = unravelMeterValues(lastMv?.payload);
+    const mvEvt = lastByType.find((e) => e.event === "MeterValues");
+    const rows = unravelMeterValues(mvEvt?.payload);
     return rows.sort((a, b) => {
       const m = a.measurand.localeCompare(b.measurand);
-      if (m !== 0) return m;
-      return a.phase.localeCompare(b.phase);
+      return m !== 0 ? m : a.phase.localeCompare(b.phase);
     });
-  }, [lastMv]);
+  }, [lastByType]);
 
   /* -------------- render -------------- */
   if (err) return <p style={{ color: "red" }}>{err}</p>;
@@ -144,6 +161,29 @@ export default function ChargePointDetail() {
 
       <button onClick={handleStart}>Start</button>{" "}
       <button onClick={handleStop}>Stop</button>
+
+      {/* -------- live key/value snapshot -------- */}
+      <h3 style={{ marginTop: "2rem" }}>Latest events</h3>
+      <table
+        border={1}
+        cellPadding={4}
+        style={{ borderCollapse: "collapse", width: "100%" }}
+      >
+        <thead>
+          <tr>
+            <th style={{ width: "30%" }}>Event</th>
+            <th>Value / Info</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lastByType.map((ev) => (
+            <tr key={ev.event}>
+              <td>{ev.event}</td>
+              <td>{describeEvent(ev)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
       {/* -------- live MV table -------- */}
       {sortedRows.length > 0 && (
@@ -179,7 +219,6 @@ export default function ChargePointDetail() {
               ))}
             </tbody>
           </table>
-
           <p style={{ fontStyle: "italic" }}>
             last updated: {new Date().toLocaleTimeString()}
           </p>
@@ -188,11 +227,7 @@ export default function ChargePointDetail() {
 
       {/* -------- configuration -------- */}
       <h3 style={{ marginTop: "2rem" }}>Configuration</h3>
-      <ConfigTable
-        cpId={id}
-        configKeys={config}
-        onConfigChange={handleConfigChange}
-      />
+      <ConfigTable cpId={id} configKeys={config} onConfigChange={handleConfigChange} />
 
       {/* -------- raw log viewer -------- */}
       <h3 style={{ marginTop: "2rem" }}>WebSocket events (this CP)</h3>
@@ -204,13 +239,11 @@ export default function ChargePointDetail() {
           padding: 6,
         }}
       >
-        {backendEvents
-          .filter((e) => e.charge_point_id === id)
-          .map((e, idx) => (
-            <pre key={idx} style={{ margin: 0 }}>
-              {JSON.stringify(e, null, 2)}
-            </pre>
-          ))}
+        {cpEvents.map((e, idx) => (
+          <pre key={idx} style={{ margin: 0 }}>
+            {JSON.stringify(e, null, 2)}
+          </pre>
+        ))}
       </div>
 
       <p style={{ marginTop: "2rem" }}>

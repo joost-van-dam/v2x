@@ -1,131 +1,127 @@
-"""Version-specifieke OCPP‑handler‑klassen met veilige defaults.
+"""Version-specifieke OCPP-handler-klassen met veilige defaults + event-bridge."""
 
-Alle inkomende OCPP‑acties waar een simulator/echte laadpaal standaard mee
-komt, krijgen hier minimaal **één** handler.  Zo voorkomt de ocpp‑lib dat er
-`NotImplementedError` gegooid wordt.
-"""
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 from typing import Any
 
-from ocpp.routing import on                          # type: ignore
-from ocpp.v16 import ChargePoint as _BaseV16         # type: ignore
-from ocpp.v16 import call_result as _res16           # type: ignore
-from ocpp.v201 import ChargePoint as _BaseV201       # type: ignore
-from ocpp.v201 import call_result as _res201         # type: ignore
+from ocpp.routing import on                             # type: ignore
+from ocpp.v16 import ChargePoint as _BaseV16            # type: ignore
+from ocpp.v16 import call_result as _res16              # type: ignore
+from ocpp.v201 import ChargePoint as _BaseV201          # type: ignore
+from ocpp.v201 import call_result as _res201            # type: ignore
 
-from application.event_bus import bus 
+from application.event_bus import bus
 
 __all__ = ["V16Handler", "V201Handler"]
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
+    """Kleine wrapper zodat alle events hetzelfde formaat hebben."""
+    await bus.publish(event, charge_point_id=cp_id, ocpp_version=ocpp_version, payload=payload)
+
 
 # ---------------------------------------------------------------------------
 # OCPP 1.6
 # ---------------------------------------------------------------------------
 class V16Handler(_BaseV16):
-    """Basisset met alle gangbare OCPP‑1.6 acties."""
+    """Basisset handlers (1.6) mét publish naar EventBus."""
 
-    # ----------------------------------------------------------------- boot
+    # ---------------- BootNotification
     @on("BootNotification")
-    async def on_boot_notification(
-        self,
-        charge_point_model: str,
-        charge_point_vendor: str,
-        **kw,
-    ):
-        logger.info("[OCPP‑1.6] BootNotification – model=%s vendor=%s", charge_point_model, charge_point_vendor)
+    async def on_boot_notification(self, charge_point_model, charge_point_vendor, **kw):
+        await _publish("BootNotification", self.id, "1.6", model=charge_point_model, vendor=charge_point_vendor)
         return _res16.BootNotification(current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted")
 
-    # ---------------------------------------------------------------- hb
+    # ---------------- Heartbeat
     @on("Heartbeat")
     async def on_heartbeat(self):
-        logger.debug("[OCPP‑1.6] Heartbeat from %s", self.id)
+        await _publish("Heartbeat", self.id, "1.6", ts=datetime.utcnow().isoformat())
         return _res16.Heartbeat(current_time=datetime.utcnow().isoformat())
 
-    # ---------------------------------------------------------------- auth
+    # ---------------- Authorize
     @on("Authorize")
     async def on_authorize(self, id_tag: str):
-        logger.debug("[OCPP‑1.6] Authorize – idTag=%s", id_tag)
+        await _publish("Authorize", self.id, "1.6", id_tag=id_tag)
         return _res16.Authorize(id_tag_info={"status": "Accepted"})
 
-    # ------------------------------------------------------- tx start/stop
+    # ---------------- Start / StopTransaction
     @on("StartTransaction")
-    async def on_start_transaction(
-        self,
-        connector_id: int,
-        id_tag: str,
-        meter_start: int,
-        timestamp: str,
-        **kw,
-    ):
-        logger.debug(
-            "[OCPP‑1.6] StartTransaction – conn=%s idTag=%s meterStart=%s ts=%s",
-            connector_id,
-            id_tag,
-            meter_start,
-            timestamp,
+    async def on_start_transaction(self, connector_id, id_tag, meter_start, timestamp, **kw):
+        await _publish(
+            "StartTransaction",
+            self.id,
+            "1.6",
+            connector_id=connector_id,
+            id_tag=id_tag,
+            meter_start=meter_start,
+            timestamp=timestamp,
         )
         return _res16.StartTransaction(transaction_id=1, id_tag_info={"status": "Accepted"})
 
     @on("StopTransaction")
-    async def on_stop_transaction(
-        self,
-        meter_stop: int,
-        timestamp: str,
-        transaction_id: int,
-        id_tag: str | None = None,
-        reason: str | None = None,
-        **kw,
-    ):
-        logger.debug(
-            "[OCPP‑1.6] StopTransaction – txId=%s reason=%s meterStop=%s ts=%s",
-            transaction_id,
-            reason,
-            meter_stop,
-            timestamp,
+    async def on_stop_transaction(self, meter_stop, timestamp, transaction_id, id_tag=None, reason=None, **kw):
+        await _publish(
+            "StopTransaction",
+            self.id,
+            "1.6",
+            meter_stop=meter_stop,
+            timestamp=timestamp,
+            transaction_id=transaction_id,
+            reason=reason,
         )
         return _res16.StopTransaction(id_tag_info={"status": "Accepted"})
 
-    # ------------------------------------------------------- status / meter
+    # ---------------- StatusNotification
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
-        logger.debug("[OCPP‑1.6] StatusNotification – data=%s", kw)
+        await _publish("StatusNotification", self.id, "1.6", **kw)
         return _res16.StatusNotification()
 
-    # ----------------------------------------------------------- MeterValues
+    # ---------------- MeterValues
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
-        logger.info("[OCPP‑1.6] MeterValues – %s", kw)
-        # 1) dispatch event
-        await bus.publish("MeterValues", charge_point_id=self.id, ocpp_version="1.6", payload=kw)
-        # 2) ack
+        await _publish("MeterValues", self.id, "1.6", **kw)
         return _res16.MeterValues()
 
 
-
 # ---------------------------------------------------------------------------
-# OCPP 2.0.1 – voor de volledigheid; hier wijzigt niets
+# OCPP 2.0.1
 # ---------------------------------------------------------------------------
 class V201Handler(_BaseV201):
-    """Minimale handler-set voor OCPP 2.0.1."""
+    """Handlers (2.0.1) mét EventBus-publish."""
 
     @on("BootNotification")
     async def on_boot_notification(self, charging_station, reason, **kw):
-        logger.info("[OCPP‑2.0.1] BootNotification – reason=%s", reason)
+        await _publish("BootNotification", self.id, "2.0.1", reason=reason, station=charging_station)
         return _res201.BootNotification(current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted")
 
     @on("Heartbeat")
     async def on_heartbeat(self):
+        await _publish("Heartbeat", self.id, "2.0.1", ts=datetime.utcnow().isoformat())
         return _res201.Heartbeat(current_time=datetime.utcnow().isoformat())
 
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
+        await _publish("StatusNotification", self.id, "2.0.1", **kw)
         return _res201.StatusNotification()
+
+    @on("StartTransaction")
+    async def on_start_transaction(self, **kw: Any):
+        await _publish("StartTransaction", self.id, "2.0.1", **kw)
+        return _res201.StartTransaction()
+
+    @on("StopTransaction")
+    async def on_stop_transaction(self, **kw: Any):
+        await _publish("StopTransaction", self.id, "2.0.1", **kw)
+        return _res201.StopTransaction()
 
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
-        logger.info("[OCPP‑2.0.1] MeterValues – %s", kw)
-        await bus.publish("MeterValues", charge_point_id=self.id, ocpp_version="2.0.1", payload=kw)
+        await _publish("MeterValues", self.id, "2.0.1", **kw)
         return _res201.MeterValues()
