@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  backend:
+    build: .
+    container_name: csms-backend
+    restart: unless-stopped
+
+    # ↔︎  Maak de API extern bereikbaar op je laptop/PC:
+    ports:
+      - "5062:5062"
+
+    # ↔︎  Development-gemak: live-reload + code-volume
+    volumes:
+      - .:/app
+
+    # Uvicorn met --reload zodat je aanpassingen direct effect hebben
+    command: >
+      uvicorn main:app --host 0.0.0.0 --port 5062 --reload
