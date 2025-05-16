@@ -1,10 +1,10 @@
 const BASE = "http://localhost:5062/api/v1";
 
-export async function fetchAllChargePoints(): Promise<string[]> {
-  const r = await fetch(`${BASE}/get-all-charge-points`);
-  if (!r.ok) throw new Error(await r.text());
-  const data = (await r.json()) as { connected: string[] };
-  return data.connected;
+/* -------- types -------- */
+export interface ChargePointInfo {
+  id: string;
+  ocpp_version: string;
+  active: boolean;
 }
 
 export interface ConfigKey {
@@ -13,14 +13,32 @@ export interface ConfigKey {
   value?: string;
 }
 
+/* -------- charge-point list -------- */
+export async function fetchAllChargePoints(): Promise<ChargePointInfo[]> {
+  const r = await fetch(`${BASE}/get-all-charge-points`);
+  if (!r.ok) throw new Error(await r.text());
+  const data = (await r.json()) as { connected: ChargePointInfo[] };
+  return data.connected;
+}
+
+/* -------- enable / disable -------- */
+export async function setChargePointActive(
+  id: string,
+  active: boolean
+): Promise<void> {
+  const ep = active ? "enable" : "disable";
+  const r = await fetch(`${BASE}/charge-points/${id}/${ep}`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+/* -------- configuration + start/stop (ongewijzigd) -------- */
 export async function fetchConfiguration(cpId: string): Promise<ConfigKey[]> {
   const r = await fetch(`${BASE}/charge-points/${cpId}/configuration`);
   if (!r.ok) throw new Error(await r.text());
   const data = await r.json();
-  //  backend verpakt resultaat in `result.configuration_key`
   return (
     data.result?.configuration_key ??
-    data.configuration_key ?? // fallback
+    data.configuration_key ??
     []
   );
 }

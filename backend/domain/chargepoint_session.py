@@ -7,9 +7,9 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
 # Transport-abstracties
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
 class WebSocketChannel(Protocol):
     async def recv(self) -> str: ...
     async def send(self, message: str) -> None: ...
@@ -24,32 +24,29 @@ class IOcppEndpoint(Protocol):
     async def call(self, message: Any) -> Any: ...
 
 
-# ------------------------------------------------------------------------
-# OCPP-versies
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
+# OCPP-versies (enum)
+# ------------------------------------------------------------------------ #
 class OCPPVersion(str, Enum):
     V16 = "1.6"
     V201 = "2.0.1"
 
 
-# ------------------------------------------------------------------------
-# Instelling-placeholder (kan later uit repo/DB komen)
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
+# Instelling-placeholder
+# ------------------------------------------------------------------------ #
 class ChargePointSettings:
     id: str
     name: str | None = None
-    enabled: bool = True
+    enabled: bool = False            # ← default nu FALSE
     ocpp_version: OCPPVersion = OCPPVersion.V16
 
 
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
 # Kern-domainobject
-# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------ #
 class ChargePointSession:
-    """
-    Eén live OCPP-verbinding met een laadpaal.
-    Houdt alleen sessie-state vast; transport gebeurt via `WebSocketChannel`.
-    """
+    """Live OCPP-sessie met een CP; houdt alleen state vast."""
 
     def __init__(
         self,
@@ -84,7 +81,7 @@ class ChargePointSession:
 
     # ------------------------------------------------------ outbound RPC
     async def send_call(self, call_obj: Any) -> Any:
-        """Stuurt een OCPP-call-object via de bibliotheek & wacht op response."""
+        """Stuur OCPP-call en wacht op response."""
         return await self._cp.call(call_obj)
 
     # ------------------------------------------------------- disconnect

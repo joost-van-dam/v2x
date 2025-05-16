@@ -1,8 +1,9 @@
+"""REST/RPC-router voor het aansturen van laadpalen."""
 from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel
 
 from application.command_service import CommandService
@@ -29,12 +30,25 @@ def router(
             raise HTTPException(status_code=404, detail="Charge-point not connected")
         return cp
 
-    # ------------------------------------------------ generic
+    # ------------------------------------------------ generic command
     @r.post("/charge-points/{cp_id}/commands")
     async def send_generic(cp_id: str, request: CommandRequest):
         return await command_service.send(cp_id, request.action, request.parameters)
 
-    # ------------------------------------------------ remote start (no body)
+    # ------------------------------------------------ enable / disable
+    @r.post("/charge-points/{cp_id}/enable", status_code=status.HTTP_200_OK)
+    async def enable_cp(cp_id: str):
+        cp = await _get(cp_id)
+        cp._settings.enabled = True
+        return {"id": cp.id, "active": True}
+
+    @r.post("/charge-points/{cp_id}/disable", status_code=status.HTTP_200_OK)
+    async def disable_cp(cp_id: str):
+        cp = await _get(cp_id)
+        cp._settings.enabled = False
+        return {"id": cp.id, "active": False}
+
+    # ------------------------------------------------ remote start / stop
     @r.post("/charge-points/{cp_id}/start", status_code=202)
     async def remote_start(cp_id: str):
         cp = await _get(cp_id)
@@ -46,7 +60,6 @@ def router(
         }
         return await command_service.send(cp_id, action, params)
 
-    # ------------------------------------------------ remote stop (no body)
     @r.post("/charge-points/{cp_id}/stop", status_code=202)
     async def remote_stop(cp_id: str):
         cp = await _get(cp_id)
@@ -83,6 +96,15 @@ def router(
     @r.get("/get-all-charge-points")
     async def list_cps():
         cps = await registry.get_all()
-        return {"connected": [c.id for c in cps]}
+        return {
+            "connected": [
+                {
+                    "id": c.id,
+                    "ocpp_version": c._settings.ocpp_version.value,
+                    "active": c._settings.enabled,
+                }
+                for c in cps
+            ]
+        }
 
     return r
