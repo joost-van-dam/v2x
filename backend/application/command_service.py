@@ -1,24 +1,18 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import HTTPException
 
 from application.connection_registry import ConnectionRegistryChargePoint
-from domain.chargepoint_session import ChargePointSession
+from domain.chargepoint_session import ChargePointSession, OCPPVersion
+from application.ocpp_command_strategy import V16CommandStrategy, V201CommandStrategy
 
 
-from application.ocpp_command_strategy import (
-    V16CommandStrategy,
-    V201CommandStrategy,
-)
-
-# ---------------------------------------------------------------
 class CommandService:
     """
     Facade voor de REST/RPC-laag: stuurt commando’s naar
-    de juiste laadpaal via de *versie-specifieke* strategy.
+    de juiste laadpaal via de versie-specifieke strategy.
     """
 
     def __init__(self, registry: ConnectionRegistryChargePoint) -> None:
@@ -29,8 +23,8 @@ class CommandService:
         if session is None:
             raise HTTPException(status_code=404, detail="Charge-point not connected")
 
-        # -------- kies juiste strategy o.b.v. CP-instellingen
-        if session._settings.ocpp_version.startswith("2."):
+        # -------- kies juiste strategy o.b.v. enum-waarde
+        if session._settings.ocpp_version is OCPPVersion.V201:
             strategy = V201CommandStrategy()
         else:
             strategy = V16CommandStrategy()

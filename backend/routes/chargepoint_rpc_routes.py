@@ -1,16 +1,3 @@
-"""REST/RPC-router voor het eenvoudig aansturen van laadpalen.
-
-Publieke endpoints (prefix **/api/v1/**):
-
-| Methode | Pad | Omschrijving |
-|---------|-----|--------------|
-| POST | /charge-points/{id}/commands | generiek OCPP‑RPC‑doorstuurpunt |
-| POST | /charge-points/{id}/start | remote‑start transaction (geen body) |
-| POST | /charge-points/{id}/stop | remote‑stop transaction (geen body) |
-| POST | /charge-points/{id}/charging-current | laadstroom (A) instellen |
-| GET  | /charge-points/{id}/configuration | volledige configuratie |
-| GET  | /get-all-charge-points | lijst verbonden laadpalen |
-"""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -20,7 +7,7 @@ from pydantic import BaseModel
 
 from application.command_service import CommandService
 from application.connection_registry import ConnectionRegistryChargePoint
-from domain.chargepoint_session import ChargePointSession
+from domain.chargepoint_session import ChargePointSession, OCPPVersion
 
 
 class CommandRequest(BaseModel):
@@ -28,7 +15,11 @@ class CommandRequest(BaseModel):
     parameters: Dict[str, Any] = {}
 
 
-def router(*, registry: ConnectionRegistryChargePoint, command_service: CommandService) -> APIRouter:
+def router(
+    *,
+    registry: ConnectionRegistryChargePoint,
+    command_service: CommandService,
+) -> APIRouter:
     r = APIRouter()
 
     # ------------------------------------------------ helpers
@@ -47,17 +38,20 @@ def router(*, registry: ConnectionRegistryChargePoint, command_service: CommandS
     @r.post("/charge-points/{cp_id}/start", status_code=202)
     async def remote_start(cp_id: str):
         cp = await _get(cp_id)
-        v201 = cp._settings.ocpp_version.startswith("2.")
-        action = "RequestStartTransaction" if v201 else "RemoteStartTransaction"
-        params = {"id_tag": "DEFAULT_TAG", **({"remote_start_id": 1234} if v201 else {"connector_id": 1})}
+        is_v201 = cp._settings.ocpp_version is OCPPVersion.V201
+        action = "RequestStartTransaction" if is_v201 else "RemoteStartTransaction"
+        params = {
+            "id_tag": "DEFAULT_TAG",
+            **({"remote_start_id": 1234} if is_v201 else {"connector_id": 1}),
+        }
         return await command_service.send(cp_id, action, params)
 
     # ------------------------------------------------ remote stop (no body)
     @r.post("/charge-points/{cp_id}/stop", status_code=202)
     async def remote_stop(cp_id: str):
         cp = await _get(cp_id)
-        v201 = cp._settings.ocpp_version.startswith("2.")
-        action = "RequestStopTransaction" if v201 else "RemoteStopTransaction"
+        is_v201 = cp._settings.ocpp_version is OCPPVersion.V201
+        action = "RequestStopTransaction" if is_v201 else "RemoteStopTransaction"
         params = {"transaction_id": 1}
         return await command_service.send(cp_id, action, params)
 
@@ -65,8 +59,8 @@ def router(*, registry: ConnectionRegistryChargePoint, command_service: CommandS
     @r.post("/charge-points/{cp_id}/charging-current")
     async def set_current(cp_id: str, current: int = Body(..., ge=1)):
         cp = await _get(cp_id)
-        v201 = cp._settings.ocpp_version.startswith("2.")
-        if v201:
+        is_v201 = cp._settings.ocpp_version is OCPPVersion.V201
+        if is_v201:
             action = "SetVariables"
             params = {"key": "ChargingCurrent", "value": str(current)}
         else:
@@ -78,9 +72,11 @@ def router(*, registry: ConnectionRegistryChargePoint, command_service: CommandS
     @r.get("/charge-points/{cp_id}/configuration")
     async def configuration(cp_id: str):
         cp = await _get(cp_id)
-        v201 = cp._settings.ocpp_version.startswith("2.")
-        action = "GetBaseReport" if v201 else "GetConfiguration"
-        params: Dict[str, Any] = {"requestId": 55, "reportBase": "FullInventory"} if v201 else {"key": []}
+        is_v201 = cp._settings.ocpp_version is OCPPVersion.V201
+        action = "GetBaseReport" if is_v201 else "GetConfiguration"
+        params: Dict[str, Any] = (
+            {"requestId": 55, "reportBase": "FullInventory"} if is_v201 else {"key": []}
+        )
         return await command_service.send(cp_id, action, params)
 
     # ------------------------------------------------ list connected

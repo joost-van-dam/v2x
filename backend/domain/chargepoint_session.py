@@ -1,16 +1,15 @@
-# domain/chargepoint_session.py
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Protocol, Any
+from enum import Enum
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-
-# ------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------
 # Transport-abstracties
-# ------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------
 class WebSocketChannel(Protocol):
     async def recv(self) -> str: ...
     async def send(self, message: str) -> None: ...
@@ -18,26 +17,34 @@ class WebSocketChannel(Protocol):
 
 
 class IOcppEndpoint(Protocol):
-    """Minimale interface die zowel CPv16 als CPv201 implementeert."""
+    """Minimale interface die zowel CP-v1.6 als CP-v2.0.1 implementeert."""
     id: str
 
     async def route_message(self, raw: str) -> None: ...
     async def call(self, message: Any) -> Any: ...
 
 
-# ------------------------------------------------------------------------ #
-# Instelling-placeholder (kan later uit repo komen)
-# ------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------
+# OCPP-versies
+# ------------------------------------------------------------------------
+class OCPPVersion(str, Enum):
+    V16 = "1.6"
+    V201 = "2.0.1"
+
+
+# ------------------------------------------------------------------------
+# Instelling-placeholder (kan later uit repo/DB komen)
+# ------------------------------------------------------------------------
 class ChargePointSettings:
     id: str
     name: str | None = None
     enabled: bool = True
-    ocpp_version: str = "1.6"
+    ocpp_version: OCPPVersion = OCPPVersion.V16
 
 
-# ------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------
 # Kern-domainobject
-# ------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------
 class ChargePointSession:
     """
     Eén live OCPP-verbinding met een laadpaal.
