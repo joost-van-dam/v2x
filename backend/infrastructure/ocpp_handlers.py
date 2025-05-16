@@ -16,6 +16,8 @@ from ocpp.v16 import call_result as _res16           # type: ignore
 from ocpp.v201 import ChargePoint as _BaseV201       # type: ignore
 from ocpp.v201 import call_result as _res201         # type: ignore
 
+from application.event_bus import bus 
+
 __all__ = ["V16Handler", "V201Handler"]
 logger = logging.getLogger(__name__)
 
@@ -92,10 +94,15 @@ class V16Handler(_BaseV16):
         logger.debug("[OCPP‑1.6] StatusNotification – data=%s", kw)
         return _res16.StatusNotification()
 
+    # ----------------------------------------------------------- MeterValues
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
-        logger.debug("[OCPP‑1.6] MeterValues – data=%s", kw)
+        logger.info("[OCPP‑1.6] MeterValues – %s", kw)
+        # 1) dispatch event
+        await bus.publish("MeterValues", charge_point_id=self.id, ocpp_version="1.6", payload=kw)
+        # 2) ack
         return _res16.MeterValues()
+
 
 
 # ---------------------------------------------------------------------------
@@ -119,4 +126,6 @@ class V201Handler(_BaseV201):
 
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
+        logger.info("[OCPP‑2.0.1] MeterValues – %s", kw)
+        await bus.publish("MeterValues", charge_point_id=self.id, ocpp_version="2.0.1", payload=kw)
         return _res201.MeterValues()

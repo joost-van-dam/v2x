@@ -9,6 +9,7 @@ from application.connection_registry import (
     ConnectionRegistryFrontend,
 )
 from application.command_service import CommandService
+from services.influxdb_service import InfluxDBService
 
 # ---------------- API / transport routes ----------------
 from routes.chargepoint_ws_routes import router as chargepoint_ws_router
@@ -48,6 +49,7 @@ app.add_middleware(
 cp_registry = ConnectionRegistryChargePoint()
 fe_registry = ConnectionRegistryFrontend()
 command_service = CommandService(cp_registry)
+InfluxDBService()  # ↙ initialiseert + subscribe
 
 # ------------------------------------------- Mount the route-modules ------
 # Routers krijgen de concrete dependencies via partial application

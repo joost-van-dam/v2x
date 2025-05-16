@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from application.connection_registry import ConnectionRegistryFrontend
+from application.event_bus import bus
+
+log = logging.getLogger("frontend-ws")
 
 
 def router(registry: ConnectionRegistryFrontend) -> APIRouter:
     r = APIRouter()
-    log = logging.getLogger("frontend-ws")
 
-    # ----------------------------------------------------------- endpoint
+    # ---------------------------------------------------------------- endpoint
     @r.websocket("/frontend")
     async def frontend_ws(ws: WebSocket) -> None:
         await ws.accept()
@@ -23,25 +25,26 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
 
         try:
             while True:
-                # We ontvangen momenteel geen RPC’s vanuit FE,
-                # maar houden de verbinding open voor events.
+                # front-end stuurt voorlopig niets
                 await ws.receive_text()
         except WebSocketDisconnect:
             log.info("Front-end %s disconnected", ws.id)
         finally:
             await registry.deregister(ws)  # type: ignore[arg-type]
 
-    # ----------------------------------------------------------- helper
-    async def broadcast(message: dict) -> None:
-        """Publiceer event naar alle ingeschreven FE-sockets."""
+    # ---------------------------------------------------------------- broadcast-helper
+    async def _broadcast(message: dict) -> None:
+        """Stuur JSON-event naar alle FE-sockets."""
         for fe in await registry.get_all():
             try:
                 await fe.send_text(json.dumps(message))
-            except Exception as exc:  # pragma: no cover
-                log.error("FE-socket error: %s", exc)
+            except Exception:
                 await registry.deregister(fe)  # type: ignore[arg-type]
 
-    # handigheidje zodat andere modules eenvoudig kunnen importeren:
-    r.broadcast = broadcast  # type: ignore[attr-defined]
+    # ---------------------------------------------------------------- event-bridge
+    async def _on_meter_values(**payload):
+        await _broadcast({"event": "MeterValues", **payload})
+
+    bus.subscribe("MeterValues", _on_meter_values)
 
     return r
