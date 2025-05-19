@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Body, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from application.command_service import CommandService
@@ -29,6 +29,18 @@ def router(
         if cp is None:
             raise HTTPException(status_code=404, detail="Charge-point not connected")
         return cp
+
+    def _unwrap_result(obj: Any) -> Any:
+        """Zet dict|object om naar het 'result' object c.q. laat origineel staan."""
+        if isinstance(obj, dict):
+            return obj.get("result", obj)
+        return getattr(obj, "result", obj)
+
+    def _field(d_or_obj: Any, snake: str, camel: str) -> Any:
+        """Levert veld terug ongeacht snake/camel of dict/object."""
+        if isinstance(d_or_obj, dict):
+            return d_or_obj.get(snake) or d_or_obj.get(camel)
+        return getattr(d_or_obj, snake, None) or getattr(d_or_obj, camel, None)
 
     # ---------------------------------------------------------------- generic command
     @r.post("/charge-points/{cp_id}/commands")
@@ -95,7 +107,7 @@ def router(
     async def configuration(cp_id: str):
         """
         – 1.6:  GetConfiguration
-        – 2.0.1: GetBaseReport → NotifyReport → (optioneel) bulk-GetVariables
+        – 2.0.1: GetBaseReport → NotifyReport → (bulk) GetVariables
         """
         cp = await _get(cp_id)
 
@@ -104,27 +116,27 @@ def router(
             return await command_service.send(cp_id, "GetConfiguration", {"key": []})
 
         # ----------------------------- OCPP 2.0.1 ---------------------------
-        # 1) buffers leegmaken
+        # buffers leegmaken
         if hasattr(cp._cp, "latest_config"):
             cp._cp.latest_config.clear()          # type: ignore[attr-defined]
         cp._cp.notify_report_done = False         # type: ignore[attr-defined]
 
-        # 2) full inventory
+        # FullInventory-report opvragen
         base_resp = await command_service.send(
             cp_id,
             "GetBaseReport",
             {"requestId": 55, "reportBase": "FullInventory"},
         )
 
-        # 3) wachten op alle NotifyReport-delen
-        for _ in range(100):          # 100 × 0.1 s = 10 s
+        # wachten op NotifyReport-einden
+        for _ in range(100):                      # 10 s timeout
             if getattr(cp._cp, "notify_report_done", False):   # type: ignore[attr-defined]
                 break
             await asyncio.sleep(0.1)
 
         raw: List[Dict[str, Any]] = getattr(cp._cp, "latest_config", [])  # type: ignore[attr-defined]
 
-        # 4) dedupliceren
+        # dedupliceren
         uniq: Dict[str, Dict[str, Any]] = {}
         for itm in raw:
             key = itm.get("key")
@@ -134,17 +146,10 @@ def router(
                 uniq[key] = itm
         cfg_list: List[Dict[str, Any]] = list(uniq.values())
 
-        # 5) bulk-GetVariables voor ontbrekende waarden
+        # ontbrekende values ophalen
         missing = [c for c in cfg_list if c.get("value") is None]
         if missing:
             CHUNK = 24
-
-            # helper om velden veilig op te halen  --------------------------
-            def _field(d_or_obj, snake: str, camel: str):
-                if isinstance(d_or_obj, dict):
-                    return d_or_obj.get(snake) or d_or_obj.get(camel)
-                return getattr(d_or_obj, snake, None)
-
             for i in range(0, len(missing), CHUNK):
                 batch = missing[i : i + CHUNK]
                 keys_payload = [
@@ -152,28 +157,65 @@ def router(
                     for itm in batch
                 ]
                 gv_wrap = await command_service.send(cp_id, "GetVariables", {"key": keys_payload})
-                gv_res = gv_wrap["result"]
+                gv_res = _unwrap_result(gv_wrap)
 
                 results = (
                     gv_res.get("get_variable_result", [])
                     if isinstance(gv_res, dict)
-                    else gv_res.get_variable_result  # type: ignore[attr-defined]
+                    else getattr(gv_res, "get_variable_result", [])
                 )
-
                 for res in results:
                     name = _field(_field(res, "variable", "variable"), "name", "name")
                     val = _field(res, "attribute_value", "attributeValue")
                     status = _field(res, "attribute_status", "attributeStatus") or "Rejected"
-
                     for itm in batch:
                         if itm["key"] == name and itm.get("value") is None:
                             itm["value"] = val
                             if status in {"Rejected", "NotSupported"}:
                                 itm["readonly"] = True
 
+        # schrijfbaarheid bepalen via Target-attribute
+        CHUNK = 24
+        for i in range(0, len(cfg_list), CHUNK):
+            batch = cfg_list[i : i + CHUNK]
+            keys_payload = [
+                {
+                    "component": itm.get("component", {}),
+                    "variable": {"name": itm["key"]},
+                    "attributeType": "Target",
+                }
+                for itm in batch
+            ]
+            gv_wrap = await command_service.send(cp_id, "GetVariables", {"key": keys_payload})
+            gv_res = _unwrap_result(gv_wrap)
+
+            results = (
+                gv_res.get("get_variable_result", [])
+                if isinstance(gv_res, dict)
+                else getattr(gv_res, "get_variable_result", [])
+            )
+            for res in results:
+                name = _field(_field(res, "variable", "variable"), "name", "name")
+                status = _field(res, "attribute_status", "attributeStatus") or "Rejected"
+                for itm in batch:
+                    if itm["key"] == name:
+                        itm["readonly"] = status != "Accepted"
+
+        for itm in cfg_list:          # default naar read-only = True
+            itm.setdefault("readonly", True)
+
         cfg_list.sort(key=lambda x: str(x["key"]).lower())
+
+        # ---- >>> bugfix hier: eerst unwrap, dán status bepalen ------------
+        result_obj = _unwrap_result(base_resp)
+        if isinstance(result_obj, dict):
+            status_val = result_obj.get("status", "Accepted")
+        else:
+            status_val = getattr(result_obj, "status", "Accepted")
+        # -------------------------------------------------------------------
+
         return {
-            "status": getattr(base_resp["result"], "status", "Accepted"),
+            "status": status_val,
             "configuration_key": cfg_list,
         }
 
