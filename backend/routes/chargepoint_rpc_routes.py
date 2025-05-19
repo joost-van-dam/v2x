@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict
 
 from fastapi import APIRouter, Body, HTTPException, status
@@ -53,8 +54,10 @@ def router(
         cp = await _get(cp_id)
         v201 = cp._settings.ocpp_version is OCPPVersion.V201
         action = "RequestStartTransaction" if v201 else "RemoteStartTransaction"
-        params = {"id_tag": "DEFAULT_TAG",
-                  **({"remote_start_id": 1234} if v201 else {"connector_id": 1})}
+        params = {
+            "id_tag": "DEFAULT_TAG",
+            **({"remote_start_id": 1234} if v201 else {"connector_id": 1}),
+        }
         return await command_service.send(cp_id, action, params)
 
     @r.post("/charge-points/{cp_id}/stop", status_code=202)
@@ -71,61 +74,70 @@ def router(
         v201 = cp._settings.ocpp_version is OCPPVersion.V201
         if v201:
             return await command_service.send(
-                cp_id, "SetVariables",
-                {"key": "ChargingCurrent", "value": str(current)}
+                cp_id,
+                "SetVariables",
+                {"key": "ChargingCurrent", "value": str(current)},
             )
         return await command_service.send(
-            cp_id, "ChangeConfiguration",
-            {"key": "MaxChargingCurrent", "value": str(current)}
+            cp_id,
+            "ChangeConfiguration",
+            {"key": "MaxChargingCurrent", "value": str(current)},
         )
 
-    # ---------------------------------------------------------------- configuration  (dedup + timeout)
+    # ---------------------------------------------------------------- configuration  (dedup + logging)
     @r.get("/charge-points/{cp_id}/configuration")
     async def configuration(cp_id: str):
         cp = await _get(cp_id)
 
-        # ============== OCPP 1.6  – simpel =============================
+        # ============ OCPP 1.6 (simpel) ==========================
         if cp._settings.ocpp_version is not OCPPVersion.V201:
             return await command_service.send(cp_id, "GetConfiguration", {"key": []})
 
-        # ============== OCPP 2.0.1  – NotifyReport flow ===============
-        # 1) reset lokale buffers
+        # ============ OCPP 2.0.1  (NotifyReport-flow) ============
+        # 1) buffers resetten
         if hasattr(cp._cp, "latest_config"):
             cp._cp.latest_config.clear()          # type: ignore[attr-defined]
         cp._cp.notify_report_done = False         # type: ignore[attr-defined]
 
-        # 2) vraag volledige inventaris aan
+        # 2) GetBaseReport sturen
         base_resp = await command_service.send(
             cp_id,
             "GetBaseReport",
             {"requestId": 55, "reportBase": "FullInventory"},
         )
+        # -- DEBUG: log request/response
+        print("▶️  GetBaseReport RESPONSE:", base_resp)
 
-        # 3) wacht (max 10 s) tot alle NotifyReport-delen binnen zijn
+        # 3) wachten op NotifyReport-stream  (max 10 s)
         for _ in range(100):          # 100 × 0.1 s = 10 s
-            if getattr(cp._cp, "notify_report_done", False):   # type: ignore[attr-defined]
+            if getattr(cp._cp, "notify_report_done", False):  # type: ignore[attr-defined]
                 break
             await asyncio.sleep(0.1)
 
-        raw_list = getattr(cp._cp, "latest_config", [])        # type: ignore[attr-defined]
+        raw_list: List[Dict[str, Any]] = getattr(
+            cp._cp, "latest_config", []
+        )  # type: ignore[attr-defined]
 
-        # 4) DEDUPLICATE  -------------------------------
+        print(f"🗒️  Aggregated NotifyReport items = {len(raw_list)}")
+        if raw_list:
+            print("🔹 first item:", json.dumps(raw_list[0], indent=2)[:400])
+
+        # 4) dedupliceren  (behoud waarde / metadata)
         unique: Dict[str, Dict[str, Any]] = {}
         for entry in raw_list:
             key = entry.get("key")
-            if key is None:
+            if not key:
                 continue
-            if key not in unique:
+            prev: Dict[str, Any] | None = unique.get(key)
+            if prev is None:
                 unique[key] = entry
             else:
-                # vervang als nieuwe entry een waarde heeft en eerdere niet
-                if unique[key].get("value") is None and entry.get("value") is not None:
+                # als vorige value None is & nieuwe wél een value heeft → overschrijf
+                if prev.get("value") is None and entry.get("value") is not None:
                     unique[key] = entry
 
-        clean_list = list(unique.values())
-        clean_list.sort(key=lambda x: str(x["key"]).lower())
+        clean_list = sorted(unique.values(), key=lambda x: str(x["key"]).lower())
 
-        # 5) response
         return {
             "status": getattr(base_resp, "status", "Accepted"),
             "configuration_key": clean_list,
