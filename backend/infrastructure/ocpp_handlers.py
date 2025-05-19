@@ -1,4 +1,4 @@
-"""Version-specifieke OCPP-handler-klassen met veilige defaults + event-bridge."""
+"""Version-specifieke OCPP-handler-klassen met veilige defaults + EventBus-bridge."""
 
 from __future__ import annotations
 
@@ -19,22 +19,22 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helper om events uniform te pushen
 # ---------------------------------------------------------------------------
 async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
-    """Pub-sub wrapper zodat alle events hetzelfde basis-formaat hebben."""
+    """Dispatch één event naar de in-process EventBus."""
     await bus.publish(
         event, charge_point_id=cp_id, ocpp_version=ocpp_version, payload=payload
     )
 
 
 # ---------------------------------------------------------------------------
-# OCPP 1.6
+# OCPP 1.6 – basisset handlers
 # ---------------------------------------------------------------------------
 class V16Handler(_BaseV16):
-    """Basisset handlers (1.6) mét publish naar EventBus."""
+    """Handlerset voor OCPP 1.6‐berichten."""
 
-    # ---------------- BootNotification
+    # BootNotification -------------------------------------------------
     @on("BootNotification")
     async def on_boot_notification(self, charge_point_model, charge_point_vendor, **kw):
         await _publish(
@@ -48,19 +48,19 @@ class V16Handler(_BaseV16):
             current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
         )
 
-    # ---------------- Heartbeat
+    # Heartbeat --------------------------------------------------------
     @on("Heartbeat")
     async def on_heartbeat(self):
         await _publish("Heartbeat", self.id, "1.6", ts=datetime.utcnow().isoformat())
         return _res16.Heartbeat(current_time=datetime.utcnow().isoformat())
 
-    # ---------------- Authorize
+    # Authorize --------------------------------------------------------
     @on("Authorize")
     async def on_authorize(self, id_tag: str):
         await _publish("Authorize", self.id, "1.6", id_tag=id_tag)
         return _res16.Authorize(id_tag_info={"status": "Accepted"})
 
-    # ---------------- Start / StopTransaction
+    # StartTransaction / StopTransaction ------------------------------
     @on("StartTransaction")
     async def on_start_transaction(
         self, connector_id, id_tag, meter_start, timestamp, **kw
@@ -99,13 +99,13 @@ class V16Handler(_BaseV16):
         )
         return _res16.StopTransaction(id_tag_info={"status": "Accepted"})
 
-    # ---------------- StatusNotification
+    # StatusNotification ----------------------------------------------
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
         await _publish("StatusNotification", self.id, "1.6", **kw)
         return _res16.StatusNotification()
 
-    # ---------------- MeterValues
+    # MeterValues ------------------------------------------------------
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
         await _publish("MeterValues", self.id, "1.6", **kw)
@@ -113,12 +113,12 @@ class V16Handler(_BaseV16):
 
 
 # ---------------------------------------------------------------------------
-# OCPP 2.0.1
+# OCPP 2.0.1 – basisset handlers
 # ---------------------------------------------------------------------------
 class V201Handler(_BaseV201):
-    """Basisset handlers (2.0.1) mét EventBus-publish."""
+    """Handlerset voor OCPP 2.0.1‐berichten."""
 
-    # ---------------- BootNotification
+    # BootNotification -------------------------------------------------
     @on("BootNotification")
     async def on_boot_notification(self, charging_station, reason, **kw):
         await _publish(
@@ -132,19 +132,19 @@ class V201Handler(_BaseV201):
             current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
         )
 
-    # ---------------- Heartbeat
+    # Heartbeat --------------------------------------------------------
     @on("Heartbeat")
     async def on_heartbeat(self):
         await _publish("Heartbeat", self.id, "2.0.1", ts=datetime.utcnow().isoformat())
         return _res201.Heartbeat(current_time=datetime.utcnow().isoformat())
 
-    # ---------------- StatusNotification
+    # StatusNotification ----------------------------------------------
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
         await _publish("StatusNotification", self.id, "2.0.1", **kw)
         return _res201.StatusNotification()
 
-    # ---------------- Start / StopTransaction
+    # StartTransaction / StopTransaction ------------------------------
     @on("StartTransaction")
     async def on_start_transaction(self, **kw: Any):
         await _publish("StartTransaction", self.id, "2.0.1", **kw)
@@ -155,19 +155,24 @@ class V201Handler(_BaseV201):
         await _publish("StopTransaction", self.id, "2.0.1", **kw)
         return _res201.StopTransaction()
 
-    # ---------------- MeterValues
+    # MeterValues ------------------------------------------------------
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
         await _publish("MeterValues", self.id, "2.0.1", **kw)
         return _res201.MeterValues()
 
-    # ---------------- NotifyEvent  ← NIEUW
+    # NotifyEvent ------------------------------------------------------  (al toegevoegd)
     @on("NotifyEvent")
     async def on_notify_event(self, **kw: Any):
-        """
-        Handler voor NotifyEvent – vereist door veel 2.0.1-palens.
-        Publiceert het event en stuurt een lege ACK terug.
-        """
         await _publish("NotifyEvent", self.id, "2.0.1", **kw)
-        # OCPP-lib verwacht een lege NotifyEvent-RESPONSE
         return _res201.NotifyEvent()
+
+    # NotifyReport -----------------------------------------------------  ←  NIEUW
+    @on("NotifyReport")
+    async def on_notify_report(self, **kw: Any):
+        """
+        Handler voor NotifyReport – antwoord op GetBaseReport / GetReport.
+        Schrijft het ruwe bericht naar de EventBus & stuurt een lege ACK.
+        """
+        await _publish("NotifyReport", self.id, "2.0.1", **kw)
+        return _res201.NotifyReport()
