@@ -1,14 +1,24 @@
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link as RouterLink } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import {
-  fetchConfiguration,
-  remoteStart,
-  remoteStop,
-} from "../api";
-import type { ConfigKey } from "../ui/ConfigTable";
+  Typography,
+  Button,
+  Stack,
+  Divider,
+  Link,
+  Paper,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  Box,
+} from "@mui/material";
+import { fetchConfiguration, remoteStart, remoteStop } from "../api";
 import ConfigTable from "../ui/ConfigTable";
+import type { ConfigKey } from "../ui/ConfigTable";
 import useBackendWs from "../hooks/useBackendWs";
-import type { BackendEvent } from "../hooks/useBackendWs";   // ← type-only import!
+import type { BackendEvent } from "../hooks/useBackendWs"; // ← type-only import
 
 /* ------------------------------------------------ helpers / types ------ */
 interface SampleRow {
@@ -21,24 +31,29 @@ interface SampleRow {
   transactionId?: number;
 }
 
+/**
+ * Normaliseert OCPP 1.6 én 2.0.1 payloads naar één tabel-shape.
+ */
 function unravelMeterValues(payload: any): SampleRow[] {
   if (!payload) return [];
-  // ---------- OCPP 1.6 ----------
+
+  /* ---------- OCPP 1.6 ---------- */
   if (Array.isArray(payload.meter_value)) {
     const txId = payload.transaction_id ?? payload.transactionId;
-    return payload.meter_value.flatMap((mvObj: any) =>
-      (mvObj.sampledValue || mvObj.sampled_value || []).map((sv: any) => ({
-        timestamp: mvObj.timestamp,
+    return payload.meter_value.flatMap((mv: any) =>
+      (mv.sampledValue || mv.sampled_value || []).map((sv: any) => ({
+        timestamp: mv.timestamp,
         measurand: sv.measurand ?? "",
         phase: sv.phase ?? "",
         value: sv.value ?? "",
         unit: sv.unit ?? "",
         context: sv.context ?? "",
         transactionId: txId,
-      }))
+      })),
     );
   }
-  // ---------- OCPP 2.0.1 ----------
+
+  /* ---------- OCPP 2.0.1 ---------- */
   if (Array.isArray(payload.evse)) {
     const rows: SampleRow[] = [];
     payload.evse.forEach((ev: any) =>
@@ -51,19 +66,20 @@ function unravelMeterValues(payload: any): SampleRow[] {
             value: sv.value ?? "",
             unit: sv.unit ?? "",
             context: sv.context ?? "",
-          })
-        )
-      )
+          }),
+        ),
+      ),
     );
     return rows;
   }
+
   return [];
 }
 
 function describeEvent(ev: BackendEvent): string {
   switch (ev.event) {
     case "StatusNotification":
-      // @ts-ignore
+      // @ts-ignore because payload is loosely typed
       return ev.payload?.status ?? JSON.stringify(ev.payload);
     case "Heartbeat":
       return new Date().toLocaleTimeString();
@@ -88,56 +104,35 @@ export default function ChargePointDetail() {
   /* ---------------- init config ---------------- */
   useEffect(() => {
     if (!id) return;
-    fetchConfiguration(id)
-      .then(setConfig)
-      .catch((e) => setErr(String(e)));
+    fetchConfiguration(id).then(setConfig).catch((e) => setErr(String(e)));
   }, [id]);
 
-  /* -------------- helpers ---------------- */
-  async function handleStart() {
-    try {
-      await remoteStart(id);
-      alert("Start sent");
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  }
-  async function handleStop() {
-    try {
-      await remoteStop(id);
-      alert("Stop sent");
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  }
+  /* ---------------- actions ---------------- */
+  const handleStart = () => remoteStart(id).catch(alert);
+  const handleStop = () => remoteStop(id).catch(alert);
 
   async function handleConfigChange(key: string, value: string) {
     try {
-      const r = await fetch(
-        `http://localhost:5062/api/v1/charge-points/${id}/commands`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "ChangeConfiguration",
-            parameters: { key, value },
-          }),
-        }
-      );
+      const r = await fetch(`http://localhost:5062/api/v1/charge-points/${id}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ChangeConfiguration",
+          parameters: { key, value },
+        }),
+      });
       if (!r.ok) throw new Error(await r.text());
-      setConfig((prev) =>
-        prev.map((c) => (c.key === key ? { ...c, value } : c))
-      );
-      alert("Config updated!");
+
+      setConfig((prev) => prev.map((c) => (c.key === key ? { ...c, value } : c)));
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     }
   }
 
-  /* -------------- live event snapshots -------------- */
+  /* ---------------- live event snapshots ---------------- */
   const cpEvents = backendEvents.filter((e) => e.charge_point_id === id);
 
-  const lastByType = useMemo(() => {
+  const lastByType: BackendEvent[] = useMemo(() => {
     const m = new Map<string, BackendEvent>();
     cpEvents.forEach((ev) => m.set(ev.event, ev));
     return Array.from(m.values());
@@ -147,108 +142,135 @@ export default function ChargePointDetail() {
     const mvEvt = lastByType.find((e) => e.event === "MeterValues");
     const rows = unravelMeterValues(mvEvt?.payload);
     return rows.sort((a, b) => {
-      const m = a.measurand.localeCompare(b.measurand);
-      return m !== 0 ? m : a.phase.localeCompare(b.phase);
+      const meas = a.measurand.localeCompare(b.measurand);
+      return meas !== 0 ? meas : a.phase.localeCompare(b.phase);
     });
   }, [lastByType]);
 
-  /* -------------- render -------------- */
-  if (err) return <p style={{ color: "red" }}>{err}</p>;
+  /* ---------------- render ---------------- */
+  if (err) return <Typography color="error">{err}</Typography>;
 
   return (
     <>
-      <h2>Charge-point {id}</h2>
-
-      <button onClick={handleStart}>Start</button>{" "}
-      <button onClick={handleStop}>Stop</button>
-
-      {/* -------- live key/value snapshot -------- */}
-      <h3 style={{ marginTop: "2rem" }}>Latest events</h3>
-      <table
-        border={1}
-        cellPadding={4}
-        style={{ borderCollapse: "collapse", width: "100%" }}
+      {/* ---------- header + buttons ---------- */}
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        alignItems="center"
+        spacing={2}
+        mb={2}
       >
-        <thead>
-          <tr>
-            <th style={{ width: "30%" }}>Event</th>
-            <th>Value / Info</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lastByType.map((ev) => (
-            <tr key={ev.event}>
-              <td>{ev.event}</td>
-              <td>{describeEvent(ev)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+          Charge-point&nbsp;{id}
+        </Typography>
 
-      {/* -------- live MV table -------- */}
+        <Button variant="contained" color="success" onClick={handleStart}>
+          Remote Start
+        </Button>
+        <Button variant="contained" color="secondary" onClick={handleStop}>
+          Remote Stop
+        </Button>
+      </Stack>
+
+      {/* ---------- latest event snapshot ---------- */}
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Typography variant="subtitle1" gutterBottom>
+          Latest events
+        </Typography>
+
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 600, width: "30%" }}>Event</TableCell>
+              <TableCell sx={{ fontWeight: 600 }}>Value / Info</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {lastByType.map((ev) => (
+              <TableRow key={ev.event}>
+                <TableCell>{ev.event}</TableCell>
+                <TableCell>{describeEvent(ev)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Paper>
+
+      {/* ---------- MeterValues ---------- */}
       {sortedRows.length > 0 && (
-        <>
-          <h3 style={{ marginTop: "2rem" }}>Last MeterValues (live)</h3>
-          <table
-            border={1}
-            cellPadding={4}
-            style={{ borderCollapse: "collapse", width: "100%" }}
-          >
-            <thead>
-              <tr>
-                <th>Measurand</th>
-                <th>Phase</th>
-                <th>Value</th>
-                <th>Unit</th>
-                <th>Context</th>
-                <th>Timestamp</th>
-                <th>Tx-ID</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+          <Typography variant="subtitle1" gutterBottom>
+            Last MeterValues (live)
+          </Typography>
+
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                {[
+                  "Measurand",
+                  "Phase",
+                  "Value",
+                  "Unit",
+                  "Context",
+                  "Timestamp",
+                  "Tx-ID",
+                ].map((h) => (
+                  <TableCell key={h} sx={{ fontWeight: 600 }}>
+                    {h}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+
+            <TableBody>
               {sortedRows.map((row, i) => (
-                <tr key={i}>
-                  <td>{row.measurand}</td>
-                  <td>{row.phase}</td>
-                  <td>{row.value}</td>
-                  <td>{row.unit}</td>
-                  <td>{row.context}</td>
-                  <td>{row.timestamp}</td>
-                  <td>{row.transactionId ?? ""}</td>
-                </tr>
+                <TableRow key={i}>
+                  <TableCell>{row.measurand}</TableCell>
+                  <TableCell>{row.phase}</TableCell>
+                  <TableCell>{row.value}</TableCell>
+                  <TableCell>{row.unit}</TableCell>
+                  <TableCell>{row.context}</TableCell>
+                  <TableCell>{row.timestamp}</TableCell>
+                  <TableCell>{row.transactionId ?? ""}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-          <p style={{ fontStyle: "italic" }}>
+            </TableBody>
+          </Table>
+
+          <Typography
+            variant="caption"
+            sx={{ fontStyle: "italic", display: "block", mt: 1 }}
+          >
             last updated: {new Date().toLocaleTimeString()}
-          </p>
-        </>
+          </Typography>
+        </Paper>
       )}
 
-      {/* -------- configuration -------- */}
-      <h3 style={{ marginTop: "2rem" }}>Configuration</h3>
-      <ConfigTable cpId={id} configKeys={config} onConfigChange={handleConfigChange} />
+      {/* ---------- configuration ---------- */}
+      <Typography variant="subtitle1" gutterBottom>
+        Configuration
+      </Typography>
+      <ConfigTable configKeys={config} onConfigChange={handleConfigChange} />
 
-      {/* -------- raw log viewer -------- */}
-      <h3 style={{ marginTop: "2rem" }}>WebSocket events (this CP)</h3>
-      <div
-        style={{
-          maxHeight: 200,
-          overflowY: "auto",
-          border: "1px solid #ccc",
-          padding: 6,
-        }}
+      {/* ---------- raw WS log ---------- */}
+      <Divider sx={{ my: 4 }} />
+      <Typography variant="subtitle1" gutterBottom>
+        WebSocket events (this CP)
+      </Typography>
+
+      <Paper
+        variant="outlined"
+        sx={{ maxHeight: 240, overflow: "auto", p: 1, mb: 4 }}
       >
         {cpEvents.map((e, idx) => (
-          <pre key={idx} style={{ margin: 0 }}>
+          <Box component="pre" key={idx} sx={{ m: 0, fontSize: 12 }}>
             {JSON.stringify(e, null, 2)}
-          </pre>
+          </Box>
         ))}
-      </div>
+      </Paper>
 
-      <p style={{ marginTop: "2rem" }}>
-        <Link to="/">← back</Link>
-      </p>
+      <Link component={RouterLink} to="/" underline="hover">
+        ← back
+      </Link>
     </>
   );
 }

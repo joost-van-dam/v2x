@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Paper, Select, MenuItem, TextField, Button, Typography
+} from "@mui/material";
 
-/* ------------------------------------------------ types --------------- */
+/* ---------------- types ---------------- */
 export interface ConfigKey {
   key: string;
   readonly: boolean;
@@ -8,95 +12,93 @@ export interface ConfigKey {
 }
 
 interface Props {
-  cpId: string;
   configKeys: ConfigKey[];
   onConfigChange: (key: string, value: string) => Promise<void>;
 }
 
 /* ====================================================================== */
-/*                           COMPONENT                                    */
-/* ====================================================================== */
-export default function ConfigTable({ cpId, configKeys, onConfigChange }: Props) {
-  // local edit-buffer
+export default function ConfigTable({ configKeys, onConfigChange }: Props) {
   const [editValues, setEditValues] = useState<Record<string, string>>({});
 
+  /* keep local buffer in sync */
   useEffect(() => {
-    const init: Record<string, string> = {};
-    configKeys.forEach((c) => (init[c.key] = c.value ?? ""));
-    setEditValues(init);
+    const buf: Record<string, string> = {};
+    configKeys.forEach((c) => { buf[c.key] = c.value ?? ""; });
+    setEditValues(buf);
   }, [configKeys]);
 
-  /* --------------------------- helpers -------------------------------- */
   const isBoolean = (v: string | undefined) => v === "true" || v === "false";
 
-  async function handleSet(k: string) {
-    const newVal = editValues[k];
-    await onConfigChange(k, newVal);
-  }
+  const handleSet = async (k: string) => {
+    await onConfigChange(k, editValues[k]);
+  };
 
-  /* --------------------------- render --------------------------------- */
   return (
-    <table
-      border={1}
-      cellPadding={4}
-      style={{ borderCollapse: "collapse", width: "100%" }}
-    >
-      <thead>
-        <tr>
-          <th style={{ width: "35%" }}>Key</th>
-          <th style={{ width: "15%" }}>Access</th>
-          <th style={{ width: "40%" }}>Current&nbsp;Value</th>
-          <th style={{ width: "10%" }}>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {configKeys.map((cfg) => {
-          const readOnly = cfg.readonly;
-          const editableVal = editValues[cfg.key] ?? "";
+    <TableContainer component={Paper} sx={{ mt: 2 }}>
+      <Table size="small">
+        <TableHead sx={{ bgcolor: "secondary.main" }}>
+          {["Key", "Access", "Current value", "Action"].map((h) => (
+            <TableCell key={h} sx={{ color: "secondary.contrastText", fontWeight: 600 }}>
+              {h}
+            </TableCell>
+          ))}
+        </TableHead>
 
-          return (
-            <tr key={cfg.key}>
-              <td style={{ wordBreak: "break-word" }}>{cfg.key}</td>
-              <td>{readOnly ? "Read-Only" : "Read/Write"}</td>
-              <td>
-                {readOnly ? (
-                  cfg.value ?? "-"
-                ) : isBoolean(cfg.value) ? (
-                  <select
-                    value={editableVal}
-                    onChange={(e) =>
-                      setEditValues((p) => ({ ...p, [cfg.key]: e.target.value }))
-                    }
-                  >
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </select>
-                ) : (
-                  <input
-                    style={{ width: "100%" }}
-                    value={editableVal}
-                    onChange={(e) =>
-                      setEditValues((p) => ({ ...p, [cfg.key]: e.target.value }))
-                    }
-                  />
-                )}
-              </td>
-              <td style={{ textAlign: "center" }}>
-                {!readOnly && (
-                  <button onClick={() => handleSet(cfg.key)}>Set</button>
-                )}
-              </td>
-            </tr>
-          );
-        })}
-        {configKeys.length === 0 && (
-          <tr>
-            <td colSpan={4} style={{ textAlign: "center" }}>
-              (no data)
-            </td>
-          </tr>
-        )}
-      </tbody>
-    </table>
+        <TableBody>
+          {configKeys.map((cfg) => {
+            const readOnly = cfg.readonly;
+            const editableVal = editValues[cfg.key] ?? "";
+
+            return (
+              <TableRow key={cfg.key} hover>
+                <TableCell sx={{ wordBreak: "break-word", width: "35%" }}>{cfg.key}</TableCell>
+                <TableCell sx={{ width: "15%" }}>{readOnly ? "Read-only" : "Read/Write"}</TableCell>
+
+                <TableCell sx={{ width: "40%" }}>
+                  {readOnly ? (
+                    cfg.value ?? "-"
+                  ) : isBoolean(cfg.value) ? (
+                    <Select
+                      size="small"
+                      value={editableVal}
+                      onChange={(e) => setEditValues((p) => ({ ...p, [cfg.key]: e.target.value }))}
+                      sx={{ minWidth: 100 }}
+                    >
+                      <MenuItem value="true">true</MenuItem>
+                      <MenuItem value="false">false</MenuItem>
+                    </Select>
+                  ) : (
+                    <TextField
+                      size="small"
+                      fullWidth
+                      value={editableVal}
+                      onChange={(e) => setEditValues((p) => ({ ...p, [cfg.key]: e.target.value }))}
+                    />
+                  )}
+                </TableCell>
+
+                <TableCell sx={{ width: "10%", textAlign: "center" }}>
+                  {!readOnly && (
+                    <Button variant="contained" size="small" onClick={() => handleSet(cfg.key)}>
+                      Set
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+
+          {configKeys.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={4} align="center">
+                <Typography variant="body2" color="text.secondary">
+                  (no data)
+                </Typography>
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
