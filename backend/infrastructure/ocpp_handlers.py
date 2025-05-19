@@ -18,8 +18,9 @@ log = logging.getLogger(__name__)
 
 
 async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
-    await bus.publish(event, charge_point_id=cp_id,
-                      ocpp_version=ocpp_version, payload=payload)
+    await bus.publish(
+        event, charge_point_id=cp_id, ocpp_version=ocpp_version, payload=payload
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -29,16 +30,23 @@ class V16Handler(_BaseV16):
     """Basis-handlers voor OCPP 1.6."""
 
     @on("BootNotification")
-    async def on_boot_notification(self, charge_point_model, charge_point_vendor, **kw):
-        await _publish("BootNotification", self.id, "1.6",
-                       model=charge_point_model, vendor=charge_point_vendor)
-        return _res16.BootNotification(current_time=datetime.utcnow().isoformat(),
-                                       interval=10, status="Accepted")
+    async def on_boot_notification(
+        self, charge_point_model, charge_point_vendor, **kw
+    ):
+        await _publish(
+            "BootNotification",
+            self.id,
+            "1.6",
+            model=charge_point_model,
+            vendor=charge_point_vendor,
+        )
+        return _res16.BootNotification(
+            current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
+        )
 
     @on("Heartbeat")
     async def on_heartbeat(self):
-        await _publish("Heartbeat", self.id, "1.6",
-                       ts=datetime.utcnow().isoformat())
+        await _publish("Heartbeat", self.id, "1.6", ts=datetime.utcnow().isoformat())
         return _res16.Heartbeat(current_time=datetime.utcnow().isoformat())
 
     @on("Authorize")
@@ -47,20 +55,35 @@ class V16Handler(_BaseV16):
         return _res16.Authorize(id_tag_info={"status": "Accepted"})
 
     @on("StartTransaction")
-    async def on_start_transaction(self, connector_id, id_tag, meter_start,
-                                   timestamp, **kw):
-        await _publish("StartTransaction", self.id, "1.6",
-                       connector_id=connector_id, id_tag=id_tag,
-                       meter_start=meter_start, timestamp=timestamp)
-        return _res16.StartTransaction(transaction_id=1,
-                                       id_tag_info={"status": "Accepted"})
+    async def on_start_transaction(
+        self, connector_id, id_tag, meter_start, timestamp, **kw
+    ):
+        await _publish(
+            "StartTransaction",
+            self.id,
+            "1.6",
+            connector_id=connector_id,
+            id_tag=id_tag,
+            meter_start=meter_start,
+            timestamp=timestamp,
+        )
+        return _res16.StartTransaction(
+            transaction_id=1, id_tag_info={"status": "Accepted"}
+        )
 
     @on("StopTransaction")
-    async def on_stop_transaction(self, meter_stop, timestamp, transaction_id,
-                                   id_tag=None, reason=None, **kw):
-        await _publish("StopTransaction", self.id, "1.6",
-                       meter_stop=meter_stop, timestamp=timestamp,
-                       transaction_id=transaction_id, reason=reason)
+    async def on_stop_transaction(
+        self, meter_stop, timestamp, transaction_id, id_tag=None, reason=None, **kw
+    ):
+        await _publish(
+            "StopTransaction",
+            self.id,
+            "1.6",
+            meter_stop=meter_stop,
+            timestamp=timestamp,
+            transaction_id=transaction_id,
+            reason=reason,
+        )
         return _res16.StopTransaction(id_tag_info={"status": "Accepted"})
 
     @on("StatusNotification")
@@ -80,25 +103,30 @@ class V16Handler(_BaseV16):
 class V201Handler(_BaseV201):
     """
     Handler-set voor OCPP 2.0.1.
-    • Cachet alle NotifyReport-delen in `self.latest_config`
-    • Zet `self.notify_report_done` op True zodra tbc==False
+    • Cachet NotifyReport-gegevens in `self.latest_config`
+    • Zet `self.notify_report_done` → True zodra het laatste deel binnen is.
     """
 
-    # ----- lifecycle --------------------------------------------------
+    # ---------------- lifecycle ---------------------------------------
     @on("BootNotification")
     async def on_boot_notification(self, charging_station, reason, **kw):
-        await _publish("BootNotification", self.id, "2.0.1",
-                       reason=reason, station=charging_station)
-        return _res201.BootNotification(current_time=datetime.utcnow().isoformat(),
-                                        interval=10, status="Accepted")
+        await _publish(
+            "BootNotification",
+            self.id,
+            "2.0.1",
+            reason=reason,
+            station=charging_station,
+        )
+        return _res201.BootNotification(
+            current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
+        )
 
     @on("Heartbeat")
     async def on_heartbeat(self):
-        await _publish("Heartbeat", self.id, "2.0.1",
-                       ts=datetime.utcnow().isoformat())
+        await _publish("Heartbeat", self.id, "2.0.1", ts=datetime.utcnow().isoformat())
         return _res201.Heartbeat(current_time=datetime.utcnow().isoformat())
 
-    # ----- status / tx / meter ---------------------------------------
+    # ---------------- status / tx / meter ------------------------------
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
         await _publish("StatusNotification", self.id, "2.0.1", **kw)
@@ -119,42 +147,64 @@ class V201Handler(_BaseV201):
         await _publish("MeterValues", self.id, "2.0.1", **kw)
         return _res201.MeterValues()
 
-    # ----- NotifyEvent -----------------------------------------------
+    # ---------------- events -------------------------------------------
     @on("NotifyEvent")
     async def on_notify_event(self, **kw: Any):
         await _publish("NotifyEvent", self.id, "2.0.1", **kw)
         return _res201.NotifyEvent()
 
-    # ----- NotifyReport  (belangrijk!) --------------------------------
+    # ---------------- NotifyReport (config) ----------------------------
     @on("NotifyReport")
-    async def on_notify_report(self,
-                               generated_at: str,
-                               report_data: List[Dict[str, Any]],
-                               request_id: int,
-                               seq_no: int,
-                               tbc: bool,
-                               **kw):
-        # init cache bij eerste bericht
+    async def on_notify_report(
+        self,
+        generated_at: str,
+        report_data: List[Dict[str, Any]],
+        request_id: int,
+        seq_no: int,
+        tbc: bool,
+        **kw,
+    ):
+        # Initialise cache bij eerste deel
         if seq_no == 0 or not hasattr(self, "latest_config"):
-            self.latest_config: List[Dict[str, Any]] = []
-            self.notify_report_done = False   # type: ignore[attr-defined]
+            self.latest_config: List[Dict[str, Any]] = []  # type: ignore[attr-defined]
+            self.notify_report_done = False  # type: ignore[attr-defined]
+
+        rows: List[Dict[str, Any]] = []
 
         for entry in report_data:
             try:
-                name = entry["variable"]["name"]
-                attrs = entry.get("variableAttribute", [])
-                first = attrs[0] if attrs else {}
-                self.latest_config.append({
-                    "key": name,
-                    "value": first.get("value"),
-                    "readonly": first.get("mutability", "ReadOnly") == "ReadOnly",
-                })
+                key = entry["variable"]["name"]
+
+                # kies de eerste attribute met een echte value
+                attr = next(
+                    (
+                        a
+                        for a in entry.get("variableAttribute", [])
+                        if a.get("value") not in (None, "")
+                    ),
+                    {},
+                )
+
+                value = attr.get("value")
+                mutability = attr.get("mutability", "ReadWrite")
+                readonly = mutability == "ReadOnly"
+
+                rows.append({"key": key, "value": value, "readonly": readonly})
             except Exception as exc:  # pragma: no cover
                 log.error("NotifyReport parse error: %s", exc, exc_info=True)
 
-        if not tbc:                      # laatste deel
-            self.notify_report_done = True   # type: ignore[attr-defined]
+        self.latest_config.extend(rows)  # type: ignore[attr-defined]
 
-        await _publish("NotifyReport", self.id, "2.0.1",
-                       seq_no=seq_no, tbc=tbc, generated_at=generated_at)
+        if not tbc:
+            self.notify_report_done = True  # type: ignore[attr-defined]
+
+        await _publish(
+            "NotifyReport",
+            self.id,
+            "2.0.1",
+            seq_no=seq_no,
+            tbc=tbc,
+            generated_at=generated_at,
+            data=rows,
+        )
         return _res201.NotifyReport()
