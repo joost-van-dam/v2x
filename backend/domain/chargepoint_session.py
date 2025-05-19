@@ -17,7 +17,7 @@ class WebSocketChannel(Protocol):
 
 
 class IOcppEndpoint(Protocol):
-    """Minimale interface die zowel CP-v1.6 als CP-v2.0.1 implementeert."""
+    """Interface die zowel CP-v1.6 als CP-v2.0.1 implementeert."""
     id: str
 
     async def route_message(self, raw: str) -> None: ...
@@ -25,7 +25,7 @@ class IOcppEndpoint(Protocol):
 
 
 # ------------------------------------------------------------------------ #
-# OCPP-versies (enum)
+# OCPP-versies
 # ------------------------------------------------------------------------ #
 class OCPPVersion(str, Enum):
     V16 = "1.6"
@@ -38,7 +38,7 @@ class OCPPVersion(str, Enum):
 class ChargePointSettings:
     id: str
     name: str | None = None
-    enabled: bool = False            # ← default nu FALSE
+    enabled: bool = False
     ocpp_version: OCPPVersion = OCPPVersion.V16
 
 
@@ -46,7 +46,10 @@ class ChargePointSettings:
 # Kern-domainobject
 # ------------------------------------------------------------------------ #
 class ChargePointSession:
-    """Live OCPP-sessie met een CP; houdt alleen state vast."""
+    """
+    Eén live OCPP-verbinding met een laadpaal.
+    Houdt alleen sessie-state vast; transport verloopt via `WebSocketChannel`.
+    """
 
     def __init__(
         self,
@@ -81,8 +84,29 @@ class ChargePointSession:
 
     # ------------------------------------------------------ outbound RPC
     async def send_call(self, call_obj: Any) -> Any:
-        """Stuur OCPP-call en wacht op response."""
-        return await self._cp.call(call_obj)
+        """
+        Stuurt een OCPP-call-object en wacht op het antwoord.
+        ➜  Logt **volledig** request & response zodat we current-value-problemen
+           in NotifyReport / GetBaseReport kunnen debuggen.
+        """
+        # -------- request-logging
+        req_json = getattr(call_obj, "to_json", None)
+        if callable(req_json):
+            logger.info("→ CP %s | request: %s", self.id, req_json())
+        else:
+            logger.info("→ CP %s | request (repr): %s", self.id, repr(call_obj))
+
+        # -------- stuur en wacht op antwoord
+        response = await self._cp.call(call_obj)
+
+        # -------- response-logging
+        res_json = getattr(response, "to_json", None)
+        if callable(res_json):
+            logger.info("← CP %s | response: %s", self.id, res_json())
+        else:
+            logger.info("← CP %s | response (repr): %s", self.id, repr(response))
+
+        return response
 
     # ------------------------------------------------------- disconnect
     async def disconnect(self) -> None:
