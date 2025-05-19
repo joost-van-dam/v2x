@@ -1,3 +1,4 @@
+// src/App.tsx
 import {
   ThemeProvider,
   createTheme,
@@ -6,10 +7,12 @@ import {
   Toolbar,
   Link,
   Container,
+  Box,
 } from "@mui/material";
 import { Routes, Route, Link as RouterLink } from "react-router-dom";
 import HomePage from "./pages/HomePage";
 import ChargePointDetail from "./pages/ChargePointDetail";
+import logoWhite from "./assets/logo_white.svg";
 
 /* --------------------------------------------------------- */
 /* Kleuren-thema (WCAG-proof)                                */
@@ -52,6 +55,14 @@ export default function App() {
       {/* ---------- top-bar ---------- */}
       <AppBar position="static" color="secondary">
         <Toolbar sx={{ gap: 2 }}>
+          {/* Logo */}
+          <Box
+            component="img"
+            src={logoWhite}
+            alt="MNEXT logo"
+            sx={{ height: 64 }}
+          />
+          {/* Titel */}
           <Link
             component={RouterLink}
             to="/"
@@ -59,7 +70,7 @@ export default function App() {
             underline="none"
             sx={{ fontWeight: 600, color: "common.white" }}
           >
-            CSMS&nbsp;Debug&nbsp;UI
+            V2X Testopstelling Debug Interface
           </Link>
         </Toolbar>
       </AppBar>
