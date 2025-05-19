@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel
@@ -18,6 +17,7 @@ class CommandRequest(BaseModel):
     parameters: Dict[str, Any] = {}
 
 
+# ------------------------------------------------------------------------------
 def router(
     *, registry: ConnectionRegistryChargePoint, command_service: CommandService
 ) -> APIRouter:
@@ -76,7 +76,13 @@ def router(
             return await command_service.send(
                 cp_id,
                 "SetVariables",
-                {"key": "ChargingCurrent", "value": str(current)},
+                {
+                    "key": {
+                        "component": {"name": "SmartChargingCtrlr"},
+                        "variable_name": "ChargingCurrent",
+                    },
+                    "value": str(current),
+                },
             )
         return await command_service.send(
             cp_id,
@@ -84,63 +90,91 @@ def router(
             {"key": "MaxChargingCurrent", "value": str(current)},
         )
 
-    # ---------------------------------------------------------------- configuration  (dedup + logging)
+    # ---------------------------------------------------------------- configuration
     @r.get("/charge-points/{cp_id}/configuration")
     async def configuration(cp_id: str):
+        """
+        – 1.6:  GetConfiguration
+        – 2.0.1: GetBaseReport → NotifyReport → (optioneel) bulk-GetVariables
+        """
         cp = await _get(cp_id)
 
-        # ============ OCPP 1.6 (simpel) ==========================
+        # ----------------------------- OCPP 1.6 -----------------------------
         if cp._settings.ocpp_version is not OCPPVersion.V201:
             return await command_service.send(cp_id, "GetConfiguration", {"key": []})
 
-        # ============ OCPP 2.0.1  (NotifyReport-flow) ============
-        # 1) buffers resetten
+        # ----------------------------- OCPP 2.0.1 ---------------------------
+        # 1) buffers leegmaken
         if hasattr(cp._cp, "latest_config"):
             cp._cp.latest_config.clear()          # type: ignore[attr-defined]
         cp._cp.notify_report_done = False         # type: ignore[attr-defined]
 
-        # 2) GetBaseReport sturen
+        # 2) full inventory
         base_resp = await command_service.send(
             cp_id,
             "GetBaseReport",
             {"requestId": 55, "reportBase": "FullInventory"},
         )
-        # -- DEBUG: log request/response
-        print("▶️  GetBaseReport RESPONSE:", base_resp)
 
-        # 3) wachten op NotifyReport-stream  (max 10 s)
+        # 3) wachten op alle NotifyReport-delen
         for _ in range(100):          # 100 × 0.1 s = 10 s
-            if getattr(cp._cp, "notify_report_done", False):  # type: ignore[attr-defined]
+            if getattr(cp._cp, "notify_report_done", False):   # type: ignore[attr-defined]
                 break
             await asyncio.sleep(0.1)
 
-        raw_list: List[Dict[str, Any]] = getattr(
-            cp._cp, "latest_config", []
-        )  # type: ignore[attr-defined]
+        raw: List[Dict[str, Any]] = getattr(cp._cp, "latest_config", [])  # type: ignore[attr-defined]
 
-        print(f"🗒️  Aggregated NotifyReport items = {len(raw_list)}")
-        if raw_list:
-            print("🔹 first item:", json.dumps(raw_list[0], indent=2)[:400])
-
-        # 4) dedupliceren  (behoud waarde / metadata)
-        unique: Dict[str, Dict[str, Any]] = {}
-        for entry in raw_list:
-            key = entry.get("key")
+        # 4) dedupliceren
+        uniq: Dict[str, Dict[str, Any]] = {}
+        for itm in raw:
+            key = itm.get("key")
             if not key:
                 continue
-            prev: Dict[str, Any] | None = unique.get(key)
-            if prev is None:
-                unique[key] = entry
-            else:
-                # als vorige value None is & nieuwe wél een value heeft → overschrijf
-                if prev.get("value") is None and entry.get("value") is not None:
-                    unique[key] = entry
+            if key not in uniq or (uniq[key].get("value") is None and itm.get("value") is not None):
+                uniq[key] = itm
+        cfg_list: List[Dict[str, Any]] = list(uniq.values())
 
-        clean_list = sorted(unique.values(), key=lambda x: str(x["key"]).lower())
+        # 5) bulk-GetVariables voor ontbrekende waarden
+        missing = [c for c in cfg_list if c.get("value") is None]
+        if missing:
+            CHUNK = 24
 
+            # helper om velden veilig op te halen  --------------------------
+            def _field(d_or_obj, snake: str, camel: str):
+                if isinstance(d_or_obj, dict):
+                    return d_or_obj.get(snake) or d_or_obj.get(camel)
+                return getattr(d_or_obj, snake, None)
+
+            for i in range(0, len(missing), CHUNK):
+                batch = missing[i : i + CHUNK]
+                keys_payload = [
+                    {"component": itm.get("component", {}), "variable": {"name": itm["key"]}}
+                    for itm in batch
+                ]
+                gv_wrap = await command_service.send(cp_id, "GetVariables", {"key": keys_payload})
+                gv_res = gv_wrap["result"]
+
+                results = (
+                    gv_res.get("get_variable_result", [])
+                    if isinstance(gv_res, dict)
+                    else gv_res.get_variable_result  # type: ignore[attr-defined]
+                )
+
+                for res in results:
+                    name = _field(_field(res, "variable", "variable"), "name", "name")
+                    val = _field(res, "attribute_value", "attributeValue")
+                    status = _field(res, "attribute_status", "attributeStatus") or "Rejected"
+
+                    for itm in batch:
+                        if itm["key"] == name and itm.get("value") is None:
+                            itm["value"] = val
+                            if status in {"Rejected", "NotSupported"}:
+                                itm["readonly"] = True
+
+        cfg_list.sort(key=lambda x: str(x["key"]).lower())
         return {
-            "status": getattr(base_resp, "status", "Accepted"),
-            "configuration_key": clean_list,
+            "status": getattr(base_resp["result"], "status", "Accepted"),
+            "configuration_key": cfg_list,
         }
 
     # ---------------------------------------------------------------- list connected
