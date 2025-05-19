@@ -6,11 +6,11 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from ocpp.routing import on                             # type: ignore
-from ocpp.v16 import ChargePoint as _BaseV16            # type: ignore
-from ocpp.v16 import call_result as _res16              # type: ignore
-from ocpp.v201 import ChargePoint as _BaseV201          # type: ignore
-from ocpp.v201 import call_result as _res201            # type: ignore
+from ocpp.routing import on                            # type: ignore
+from ocpp.v16 import ChargePoint as _BaseV16           # type: ignore
+from ocpp.v16 import call_result as _res16             # type: ignore
+from ocpp.v201 import ChargePoint as _BaseV201         # type: ignore
+from ocpp.v201 import call_result as _res201           # type: ignore
 
 from application.event_bus import bus
 
@@ -19,11 +19,13 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper
 # ---------------------------------------------------------------------------
 async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
-    """Kleine wrapper zodat alle events hetzelfde formaat hebben."""
-    await bus.publish(event, charge_point_id=cp_id, ocpp_version=ocpp_version, payload=payload)
+    """Pub-sub wrapper zodat alle events hetzelfde basis-formaat hebben."""
+    await bus.publish(
+        event, charge_point_id=cp_id, ocpp_version=ocpp_version, payload=payload
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -35,8 +37,16 @@ class V16Handler(_BaseV16):
     # ---------------- BootNotification
     @on("BootNotification")
     async def on_boot_notification(self, charge_point_model, charge_point_vendor, **kw):
-        await _publish("BootNotification", self.id, "1.6", model=charge_point_model, vendor=charge_point_vendor)
-        return _res16.BootNotification(current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted")
+        await _publish(
+            "BootNotification",
+            self.id,
+            "1.6",
+            model=charge_point_model,
+            vendor=charge_point_vendor,
+        )
+        return _res16.BootNotification(
+            current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
+        )
 
     # ---------------- Heartbeat
     @on("Heartbeat")
@@ -52,7 +62,9 @@ class V16Handler(_BaseV16):
 
     # ---------------- Start / StopTransaction
     @on("StartTransaction")
-    async def on_start_transaction(self, connector_id, id_tag, meter_start, timestamp, **kw):
+    async def on_start_transaction(
+        self, connector_id, id_tag, meter_start, timestamp, **kw
+    ):
         await _publish(
             "StartTransaction",
             self.id,
@@ -62,10 +74,20 @@ class V16Handler(_BaseV16):
             meter_start=meter_start,
             timestamp=timestamp,
         )
-        return _res16.StartTransaction(transaction_id=1, id_tag_info={"status": "Accepted"})
+        return _res16.StartTransaction(
+            transaction_id=1, id_tag_info={"status": "Accepted"}
+        )
 
     @on("StopTransaction")
-    async def on_stop_transaction(self, meter_stop, timestamp, transaction_id, id_tag=None, reason=None, **kw):
+    async def on_stop_transaction(
+        self,
+        meter_stop,
+        timestamp,
+        transaction_id,
+        id_tag=None,
+        reason=None,
+        **kw,
+    ):
         await _publish(
             "StopTransaction",
             self.id,
@@ -94,23 +116,35 @@ class V16Handler(_BaseV16):
 # OCPP 2.0.1
 # ---------------------------------------------------------------------------
 class V201Handler(_BaseV201):
-    """Handlers (2.0.1) mét EventBus-publish."""
+    """Basisset handlers (2.0.1) mét EventBus-publish."""
 
+    # ---------------- BootNotification
     @on("BootNotification")
     async def on_boot_notification(self, charging_station, reason, **kw):
-        await _publish("BootNotification", self.id, "2.0.1", reason=reason, station=charging_station)
-        return _res201.BootNotification(current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted")
+        await _publish(
+            "BootNotification",
+            self.id,
+            "2.0.1",
+            reason=reason,
+            station=charging_station,
+        )
+        return _res201.BootNotification(
+            current_time=datetime.utcnow().isoformat(), interval=10, status="Accepted"
+        )
 
+    # ---------------- Heartbeat
     @on("Heartbeat")
     async def on_heartbeat(self):
         await _publish("Heartbeat", self.id, "2.0.1", ts=datetime.utcnow().isoformat())
         return _res201.Heartbeat(current_time=datetime.utcnow().isoformat())
 
+    # ---------------- StatusNotification
     @on("StatusNotification")
     async def on_status_notification(self, **kw: Any):
         await _publish("StatusNotification", self.id, "2.0.1", **kw)
         return _res201.StatusNotification()
 
+    # ---------------- Start / StopTransaction
     @on("StartTransaction")
     async def on_start_transaction(self, **kw: Any):
         await _publish("StartTransaction", self.id, "2.0.1", **kw)
@@ -121,7 +155,19 @@ class V201Handler(_BaseV201):
         await _publish("StopTransaction", self.id, "2.0.1", **kw)
         return _res201.StopTransaction()
 
+    # ---------------- MeterValues
     @on("MeterValues")
     async def on_meter_values(self, **kw: Any):
         await _publish("MeterValues", self.id, "2.0.1", **kw)
         return _res201.MeterValues()
+
+    # ---------------- NotifyEvent  ← NIEUW
+    @on("NotifyEvent")
+    async def on_notify_event(self, **kw: Any):
+        """
+        Handler voor NotifyEvent – vereist door veel 2.0.1-palens.
+        Publiceert het event en stuurt een lege ACK terug.
+        """
+        await _publish("NotifyEvent", self.id, "2.0.1", **kw)
+        # OCPP-lib verwacht een lege NotifyEvent-RESPONSE
+        return _res201.NotifyEvent()

@@ -1,0 +1,85 @@
+name: Backend CI / CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:                         # ↙️  pas de standaard-waarden zonodig aan
+  PYTHON_VERSION: "3.12"
+  REGISTRY: ghcr.io          # bv. ghcr.io of registry.hub.docker.com
+  IMAGE_NAME: ${{ github.repository }}-backend
+
+jobs:
+  ci:
+    name: 🧪 CI – lint + tests + Sonar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      # ---------- Python tool-chain ----------
+      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: 📦 Install deps
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          # lint / formatters (optioneel)
+          pip install ruff black pytest pytest-cov
+
+      - name: 🔍 Ruff lint
+        run: |
+          ruff backend
+
+      - name: 🧪 Run unit-tests
+        run: |
+          pytest -q backend
+
+      # (Optioneel) End-to-end-tests (disabled – uncomment indien klaar)
+      # - name: 🧪 E2E tests
+      #   run: |
+      #     pytest -q tests/e2e
+
+      # ---------- SonarQube / SonarCloud ----------
+      - name: 🔎 Sonar – analyse
+        uses: sonarsource/sonarcloud-github-action@v2
+        with:
+          projectBaseDir: backend
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  cd:
+    name: 🚀 CD – build + push Docker image
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- Log-in op container-registry ----------
+      - name: 🔑 Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # ---------- Build & push ----------
+      - name: 🐳 Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
