@@ -371,7 +371,8 @@ export default function ChargePointDetail() {
           <EventLogPanel
             events={cpEvents}
             filename={`${id}_events.json`}
-            height={400}
+            height="80vh"
+            width="90%"
           />
         </>
       )}
