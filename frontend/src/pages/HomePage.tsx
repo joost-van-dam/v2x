@@ -1,8 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import {
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
-  Checkbox, Typography, Link, CircularProgress, Divider,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  Checkbox,
+  Typography,
+  Link,
+  CircularProgress,
+  Divider,
 } from "@mui/material";
 import {
   fetchAllChargePoints,
@@ -13,11 +23,15 @@ import useBackendWs from "../hooks/useBackendWs";
 import EventLogPanel from "../ui/EventLogPanel";
 
 export default function HomePage() {
+  /* ---------------- state ---------------- */
   const [cps, setCps] = useState<ChargePointInfo[]>([]);
   const [err, setErr] = useState<string>();
   const [loading, setLoading] = useState(true);
+
+  /* ---------------- live backend events ---------------- */
   const backendEvents = useBackendWs();
 
+  /* ---------------- init CP-list ---------------- */
   useEffect(() => {
     fetchAllChargePoints()
       .then(setCps)
@@ -25,17 +39,29 @@ export default function HomePage() {
       .finally(() => setLoading(false));
   }, []);
 
+  /* ---------------- toggle active ---------------- */
   const handleToggle = async (id: string, newVal: boolean) => {
     try {
       await setChargePointActive(id, newVal);
       setCps((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, active: newVal } : c))
+        prev.map((c) => (c.id === id ? { ...c, active: newVal } : c)),
       );
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     }
   };
 
+  /* ---------------- filter events → alleen ‘enabled’ CP’s ---------------- */
+  const activeEvents = useMemo(() => {
+    const activeIds = new Set(
+      cps.filter((c) => c.active).map((c) => c.id),
+    );
+    return backendEvents.filter((e) =>
+      activeIds.has(e.charge_point_id ?? ""),
+    );
+  }, [backendEvents, cps]);
+
+  /* ---------------- loading / error ---------------- */
   if (loading) return <CircularProgress />;
   if (err)
     return (
@@ -44,6 +70,7 @@ export default function HomePage() {
       </Typography>
     );
 
+  /* ---------------- render ---------------- */
   return (
     <>
       <Typography variant="h5" gutterBottom>
@@ -66,8 +93,12 @@ export default function HomePage() {
           <TableBody>
             {cps.map((cp) => (
               <TableRow key={cp.id} hover>
-                <TableCell sx={{ width: 220 }}>{cp.alias ?? "—"}</TableCell>
-                <TableCell sx={{ wordBreak: "break-word" }}>{cp.id}</TableCell>
+                <TableCell sx={{ width: 220 }}>
+                  {cp.alias ?? "—"}
+                </TableCell>
+                <TableCell sx={{ wordBreak: "break-word" }}>
+                  {cp.id}
+                </TableCell>
                 <TableCell>{cp.ocpp_version}</TableCell>
                 <TableCell>
                   <Checkbox
@@ -105,14 +136,14 @@ export default function HomePage() {
         </Table>
       </TableContainer>
 
-      {/* -------- global backend events -------- */}
+      {/* -------- global backend events (alleen actieve CP’s) -------- */}
       <Divider sx={{ my: 4 }} />
       <Typography variant="subtitle1" gutterBottom>
-        Backend events (all charge-points)
+        Backend events (active charge-points)
       </Typography>
       <EventLogPanel
-        events={backendEvents}
-        filename="all_cp_events.json"
+        events={activeEvents}
+        filename="active_cp_events.json"
         height={300}
       />
     </>
