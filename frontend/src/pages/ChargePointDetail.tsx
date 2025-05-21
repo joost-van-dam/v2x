@@ -1,26 +1,38 @@
-import { useParams, Link as RouterLink } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import {
   Typography,
   Button,
+  Tabs,
+  Tab,
+  Box,
   Stack,
-  Divider,
-  Link,
+  TextField,
+  IconButton,
   Paper,
   Table,
   TableHead,
   TableRow,
   TableCell,
   TableBody,
-  Box,
+  CircularProgress,
 } from "@mui/material";
-import { fetchConfiguration, remoteStart, remoteStop } from "../api";
+import EditIcon from "@mui/icons-material/Edit";
+import SaveIcon from "@mui/icons-material/Save";
+import {
+  fetchConfiguration,
+  remoteStart,
+  remoteStop,
+  fetchSettings,
+  setAlias,
+} from "../api";
+import type { ConfigKey, CpSettings } from "../api";
 import ConfigTable from "../ui/ConfigTable";
-import type { ConfigKey } from "../ui/ConfigTable";
 import useBackendWs from "../hooks/useBackendWs";
-import type { BackendEvent } from "../hooks/useBackendWs"; // ← type-only import
+import type { BackendEvent } from "../hooks/useBackendWs";
+import EventLogPanel from "../ui/EventLogPanel";
 
-/* ------------------------------------------------ helpers / types ------ */
+/* ------------------------------------------------ helpers ------ */
 interface SampleRow {
   timestamp: string;
   measurand: string;
@@ -31,13 +43,10 @@ interface SampleRow {
   transactionId?: number;
 }
 
-/**
- * Normaliseert OCPP 1.6 én 2.0.1 payloads naar één tabel-shape.
- */
 function unravelMeterValues(payload: any): SampleRow[] {
   if (!payload) return [];
 
-  /* ---------- OCPP 1.6 ---------- */
+  // ---------- OCPP 1.6 ----------
   if (Array.isArray(payload.meter_value)) {
     const txId = payload.transaction_id ?? payload.transactionId;
     return payload.meter_value.flatMap((mv: any) =>
@@ -53,7 +62,7 @@ function unravelMeterValues(payload: any): SampleRow[] {
     );
   }
 
-  /* ---------- OCPP 2.0.1 ---------- */
+  // ---------- OCPP 2.0.1 ----------
   if (Array.isArray(payload.evse)) {
     const rows: SampleRow[] = [];
     payload.evse.forEach((ev: any) =>
@@ -79,16 +88,16 @@ function unravelMeterValues(payload: any): SampleRow[] {
 function describeEvent(ev: BackendEvent): string {
   switch (ev.event) {
     case "StatusNotification":
-      // @ts-ignore because payload is loosely typed
+      // @ts-ignore
       return ev.payload?.status ?? JSON.stringify(ev.payload);
     case "Heartbeat":
       return new Date().toLocaleTimeString();
     case "StartTransaction":
-      // @ts-ignore
-      return `txId=${ev.payload?.transaction_id ?? ev.payload?.transactionId ?? "?"}`;
     case "StopTransaction":
       // @ts-ignore
-      return `txId=${ev.payload?.transaction_id ?? ev.payload?.transactionId ?? "?"}`;
+      return `txId=${
+        ev.payload?.transaction_id ?? ev.payload?.transactionId ?? "?"
+      }`;
     default:
       return JSON.stringify(ev.payload);
   }
@@ -97,41 +106,44 @@ function describeEvent(ev: BackendEvent): string {
 /* ====================================================================== */
 export default function ChargePointDetail() {
   const { id = "" } = useParams();
+  const [tab, setTab] = useState(0);
+
+  /* ------- settings ------- */
+  const [settings, setSettings] = useState<CpSettings>();
+  const [aliasEdit, setAliasEdit] = useState(false);
+  const [aliasVal, setAliasVal] = useState("");
+
+  /* ------- config ------- */
   const [config, setConfig] = useState<ConfigKey[]>([]);
-  const [err, setErr] = useState<string>();
+  const [cfgLoading, setCfgLoading] = useState(false);
+
+  /* ------- events ------- */
   const backendEvents = useBackendWs();
-
-  /* ---------------- init config ---------------- */
-  useEffect(() => {
-    if (!id) return;
-    fetchConfiguration(id).then(setConfig).catch((e) => setErr(String(e)));
-  }, [id]);
-
-  /* ---------------- actions ---------------- */
-  const handleStart = () => remoteStart(id).catch(alert);
-  const handleStop = () => remoteStop(id).catch(alert);
-
-  async function handleConfigChange(key: string, value: string) {
-    try {
-      const r = await fetch(`http://localhost:5062/api/v1/charge-points/${id}/commands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "ChangeConfiguration",
-          parameters: { key, value },
-        }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-
-      setConfig((prev) => prev.map((c) => (c.key === key ? { ...c, value } : c)));
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  /* ---------------- live event snapshots ---------------- */
   const cpEvents = backendEvents.filter((e) => e.charge_point_id === id);
 
+  /* ---------------- init ---------------- */
+  useEffect(() => {
+    fetchSettings(id).then((s) => {
+      setSettings(s);
+      setAliasVal(s.alias ?? "");
+    });
+  }, [id]);
+
+  /* ---------------- helpers ---------------- */
+  const refreshConfig = () => {
+    setCfgLoading(true);
+    fetchConfiguration(id)
+      .then(setConfig)
+      .finally(() => setCfgLoading(false));
+  };
+
+  const handleAliasSave = async () => {
+    await setAlias(id, aliasVal);
+    setAliasEdit(false);
+    setSettings((p) => (p ? { ...p, alias: aliasVal } : p));
+  };
+
+  /* ------- derived data ------- */
   const lastByType: BackendEvent[] = useMemo(() => {
     const m = new Map<string, BackendEvent>();
     cpEvents.forEach((ev) => m.set(ev.event, ev));
@@ -148,129 +160,196 @@ export default function ChargePointDetail() {
   }, [lastByType]);
 
   /* ---------------- render ---------------- */
-  if (err) return <Typography color="error">{err}</Typography>;
+  if (!settings) return <CircularProgress />;
 
   return (
     <>
-      {/* ---------- header + buttons ---------- */}
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        alignItems="center"
-        spacing={2}
-        mb={2}
-      >
-        <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          Charge-point&nbsp;{id}
-        </Typography>
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
+        <Tab label="Status & control" />
+        <Tab label="Configuration" />
+        <Tab label="WebSocket events" />
+      </Tabs>
 
-        <Button variant="contained" color="success" onClick={handleStart}>
-          Remote Start
-        </Button>
-        <Button variant="contained" color="secondary" onClick={handleStop}>
-          Remote Stop
-        </Button>
-      </Stack>
-
-      {/* ---------- latest event snapshot ---------- */}
-      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Typography variant="subtitle1" gutterBottom>
-          Latest events
-        </Typography>
-
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, width: "30%" }}>Event</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Value / Info</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {lastByType.map((ev) => (
-              <TableRow key={ev.event}>
-                <TableCell>{ev.event}</TableCell>
-                <TableCell>{describeEvent(ev)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-
-      {/* ---------- MeterValues ---------- */}
-      {sortedRows.length > 0 && (
-        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-          <Typography variant="subtitle1" gutterBottom>
-            Last MeterValues (live)
-          </Typography>
-
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                {[
-                  "Measurand",
-                  "Phase",
-                  "Value",
-                  "Unit",
-                  "Context",
-                  "Timestamp",
-                  "Tx-ID",
-                ].map((h) => (
-                  <TableCell key={h} sx={{ fontWeight: 600 }}>
-                    {h}
-                  </TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-
-            <TableBody>
-              {sortedRows.map((row, i) => (
-                <TableRow key={i}>
-                  <TableCell>{row.measurand}</TableCell>
-                  <TableCell>{row.phase}</TableCell>
-                  <TableCell>{row.value}</TableCell>
-                  <TableCell>{row.unit}</TableCell>
-                  <TableCell>{row.context}</TableCell>
-                  <TableCell>{row.timestamp}</TableCell>
-                  <TableCell>{row.transactionId ?? ""}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
-          <Typography
-            variant="caption"
-            sx={{ fontStyle: "italic", display: "block", mt: 1 }}
+      {/* ---------------------------------------------------------------- */}
+      {tab === 0 && (
+        <>
+          {/* ------- header / actions ------- */}
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            alignItems="center"
+            spacing={2}
+            mb={3}
           >
-            last updated: {new Date().toLocaleTimeString()}
-          </Typography>
-        </Paper>
+            <Typography variant="h6" sx={{ flexGrow: 1 }}>
+              Charge-point&nbsp;{id}
+            </Typography>
+
+            <Button
+              variant="contained"
+              color="success"
+              onClick={() => remoteStart(id)}
+            >
+              Remote Start
+            </Button>
+            <Button
+              variant="contained"
+              color="secondary"
+              onClick={() => remoteStop(id)}
+            >
+              Remote Stop
+            </Button>
+          </Stack>
+
+          {/* ------- settings overview ------- */}
+          <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Settings
+            </Typography>
+
+            <Table size="small">
+              <TableBody>
+                <TableRow>
+                  <TableCell sx={{ width: 180, fontWeight: 600 }}>Alias</TableCell>
+                  <TableCell>
+                    {aliasEdit ? (
+                      <Stack direction="row" spacing={1}>
+                        <TextField
+                          size="small"
+                          value={aliasVal}
+                          onChange={(e) => setAliasVal(e.target.value)}
+                        />
+                        <IconButton color="primary" onClick={handleAliasSave}>
+                          <SaveIcon />
+                        </IconButton>
+                      </Stack>
+                    ) : (
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <span>{settings.alias ?? "—"}</span>
+                        <IconButton
+                          size="small"
+                          onClick={() => setAliasEdit(true)}
+                          aria-label="edit alias"
+                        >
+                          <EditIcon fontSize="inherit" />
+                        </IconButton>
+                      </Stack>
+                    )}
+                  </TableCell>
+                </TableRow>
+
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600 }}>OCPP version</TableCell>
+                  <TableCell>{settings.ocpp_version}</TableCell>
+                </TableRow>
+
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600 }}>Active</TableCell>
+                  <TableCell>{settings.active ? "Yes" : "No"}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Paper>
+
+          {/* ------- latest events ------- */}
+          <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Latest events
+            </Typography>
+
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600, width: "30%" }}>
+                    Event
+                  </TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Value / Info</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {lastByType.map((ev) => (
+                  <TableRow key={ev.event}>
+                    <TableCell>{ev.event}</TableCell>
+                    <TableCell>{describeEvent(ev)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Paper>
+
+          {/* ------- MeterValues ------- */}
+          {sortedRows.length > 0 && (
+            <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+              <Typography variant="subtitle1" gutterBottom>
+                Last MeterValues (live)
+              </Typography>
+
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {[
+                      "Measurand",
+                      "Phase",
+                      "Value",
+                      "Unit",
+                      "Context",
+                      "Timestamp",
+                      "Tx-ID",
+                    ].map((h) => (
+                      <TableCell key={h} sx={{ fontWeight: 600 }}>
+                        {h}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+
+                <TableBody>
+                  {sortedRows.map((row, i) => (
+                    <TableRow key={i}>
+                      <TableCell>{row.measurand}</TableCell>
+                      <TableCell>{row.phase}</TableCell>
+                      <TableCell>{row.value}</TableCell>
+                      <TableCell>{row.unit}</TableCell>
+                      <TableCell>{row.context}</TableCell>
+                      <TableCell>{row.timestamp}</TableCell>
+                      <TableCell>{row.transactionId ?? ""}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Paper>
+          )}
+        </>
       )}
 
-      {/* ---------- configuration ---------- */}
-      <Typography variant="subtitle1" gutterBottom>
-        Configuration
-      </Typography>
-      <ConfigTable configKeys={config} onConfigChange={handleConfigChange} />
+      {/* ---------------------------------------------------------------- */}
+      {tab === 1 && (
+        <>
+          <Stack direction="row" alignItems="center" spacing={2} mb={2}>
+            <Typography variant="subtitle1">Configuration</Typography>
+            <Button size="small" variant="outlined" onClick={refreshConfig}>
+              Refresh
+            </Button>
+            {cfgLoading && <CircularProgress size={20} />}
+          </Stack>
 
-      {/* ---------- raw WS log ---------- */}
-      <Divider sx={{ my: 4 }} />
-      <Typography variant="subtitle1" gutterBottom>
-        WebSocket events (this CP)
-      </Typography>
+          <ConfigTable configKeys={config} onConfigChange={refreshConfig} />
+        </>
+      )}
 
-      <Paper
-        variant="outlined"
-        sx={{ maxHeight: 240, overflow: "auto", p: 1, mb: 4 }}
-      >
-        {cpEvents.map((e, idx) => (
-          <Box component="pre" key={idx} sx={{ m: 0, fontSize: 12 }}>
-            {JSON.stringify(e, null, 2)}
-          </Box>
-        ))}
-      </Paper>
+      {/* ---------------------------------------------------------------- */}
+      {tab === 2 && (
+        <>
+          <Typography variant="subtitle1" gutterBottom>
+            WebSocket events (this CP)
+          </Typography>
 
-      <Link component={RouterLink} to="/" underline="hover">
-        ← back
-      </Link>
+          <EventLogPanel
+            events={cpEvents}
+            filename={`${id}_events.json`}
+            height={400}
+          />
+        </>
+      )}
     </>
   );
 }

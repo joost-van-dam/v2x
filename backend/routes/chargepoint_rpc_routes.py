@@ -1,10 +1,10 @@
-"""REST/RPC-router voor het aansturen van laadpalen."""
+"""REST/RPC-router voor het aansturen van laadpalen, incl. alias-support."""
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
 from application.command_service import CommandService
@@ -17,10 +17,15 @@ class CommandRequest(BaseModel):
     parameters: Dict[str, Any] = {}
 
 
+class AliasRequest(BaseModel):
+    alias: Optional[str] = None
+
+
 # ------------------------------------------------------------------------------
 def router(
     *, registry: ConnectionRegistryChargePoint, command_service: CommandService
 ) -> APIRouter:
+    """Factory-functie die de router retourneert."""
     r = APIRouter()
 
     # ---------------------------------------------------------------- helpers
@@ -31,16 +36,33 @@ def router(
         return cp
 
     def _unwrap_result(obj: Any) -> Any:
-        """Zet dict|object om naar het 'result' object c.q. laat origineel staan."""
+        """Pak ‘result’ uit ocpp-response wrappers."""
         if isinstance(obj, dict):
             return obj.get("result", obj)
         return getattr(obj, "result", obj)
 
     def _field(d_or_obj: Any, snake: str, camel: str) -> Any:
-        """Levert veld terug ongeacht snake/camel of dict/object."""
+        """Dict/object → snake/camel fallback field-getter."""
         if isinstance(d_or_obj, dict):
             return d_or_obj.get(snake) or d_or_obj.get(camel)
         return getattr(d_or_obj, snake, None) or getattr(d_or_obj, camel, None)
+
+    # ---------------------------------------------------------------- alias-endpoints
+    @r.put("/charge-points/{cp_id}/set-alias")
+    async def set_alias(cp_id: str, req: AliasRequest):
+        cp = await _get(cp_id)
+        cp._settings.alias = req.alias
+        return {"id": cp.id, "alias": cp._settings.alias}
+
+    @r.get("/charge-points/{cp_id}/settings")
+    async def get_settings(cp_id: str):
+        cp = await _get(cp_id)
+        return {
+            "id": cp.id,
+            "ocpp_version": cp._settings.ocpp_version.value,
+            "active": cp._settings.enabled,
+            "alias": cp._settings.alias,
+        }
 
     # ---------------------------------------------------------------- generic command
     @r.post("/charge-points/{cp_id}/commands")
@@ -102,12 +124,12 @@ def router(
             {"key": "MaxChargingCurrent", "value": str(current)},
         )
 
-    # ---------------------------------------------------------------- configuration
+    # ---------------------------------------------------------------- configuration (1.6 & 2.0.1)
     @r.get("/charge-points/{cp_id}/configuration")
     async def configuration(cp_id: str):
         """
-        – 1.6:  GetConfiguration
-        – 2.0.1: GetBaseReport → NotifyReport → (bulk) GetVariables
+        – OCPP 1.6 : GetConfiguration  
+        – OCPP 2.0.1 : GetBaseReport → NotifyReport → (bulk) GetVariables
         """
         cp = await _get(cp_id)
 
@@ -128,8 +150,8 @@ def router(
             {"requestId": 55, "reportBase": "FullInventory"},
         )
 
-        # wachten op NotifyReport-einden
-        for _ in range(100):                      # 10 s timeout
+        # wachten op NotifyReport-einden (max 10 s)
+        for _ in range(100):
             if getattr(cp._cp, "notify_report_done", False):   # type: ignore[attr-defined]
                 break
             await asyncio.sleep(0.1)
@@ -142,7 +164,9 @@ def router(
             key = itm.get("key")
             if not key:
                 continue
-            if key not in uniq or (uniq[key].get("value") is None and itm.get("value") is not None):
+            if key not in uniq or (
+                uniq[key].get("value") is None and itm.get("value") is not None
+            ):
                 uniq[key] = itm
         cfg_list: List[Dict[str, Any]] = list(uniq.values())
 
@@ -153,10 +177,15 @@ def router(
             for i in range(0, len(missing), CHUNK):
                 batch = missing[i : i + CHUNK]
                 keys_payload = [
-                    {"component": itm.get("component", {}), "variable": {"name": itm["key"]}}
+                    {
+                        "component": itm.get("component", {}),
+                        "variable": {"name": itm["key"]},
+                    }
                     for itm in batch
                 ]
-                gv_wrap = await command_service.send(cp_id, "GetVariables", {"key": keys_payload})
+                gv_wrap = await command_service.send(
+                    cp_id, "GetVariables", {"key": keys_payload}
+                )
                 gv_res = _unwrap_result(gv_wrap)
 
                 results = (
@@ -186,7 +215,9 @@ def router(
                 }
                 for itm in batch
             ]
-            gv_wrap = await command_service.send(cp_id, "GetVariables", {"key": keys_payload})
+            gv_wrap = await command_service.send(
+                cp_id, "GetVariables", {"key": keys_payload}
+            )
             gv_res = _unwrap_result(gv_wrap)
 
             results = (
@@ -206,13 +237,13 @@ def router(
 
         cfg_list.sort(key=lambda x: str(x["key"]).lower())
 
-        # ---- >>> bugfix hier: eerst unwrap, dán status bepalen ------------
+        # status uit eerste response halen
         result_obj = _unwrap_result(base_resp)
-        if isinstance(result_obj, dict):
-            status_val = result_obj.get("status", "Accepted")
-        else:
-            status_val = getattr(result_obj, "status", "Accepted")
-        # -------------------------------------------------------------------
+        status_val = (
+            result_obj.get("status", "Accepted")
+            if isinstance(result_obj, dict)
+            else getattr(result_obj, "status", "Accepted")
+        )
 
         return {
             "status": status_val,
@@ -221,17 +252,18 @@ def router(
 
     # ---------------------------------------------------------------- list connected
     @r.get("/get-all-charge-points")
-    async def list_cps():
+    async def list_cps(active: Optional[bool] = Query(None)):
         cps = await registry.get_all()
-        return {
-            "connected": [
-                {
-                    "id": c.id,
-                    "ocpp_version": c._settings.ocpp_version.value,
-                    "active": c._settings.enabled,
-                }
-                for c in cps
-            ]
-        }
+        items = [
+            {
+                "id": c.id,
+                "ocpp_version": c._settings.ocpp_version.value,
+                "active": c._settings.enabled,
+                "alias": c._settings.alias,
+            }
+            for c in cps
+            if active is None or c._settings.enabled == active
+        ]
+        return {"connected": items}
 
     return r

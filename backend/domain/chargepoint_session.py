@@ -37,7 +37,7 @@ class OCPPVersion(str, Enum):
 # ------------------------------------------------------------------------ #
 class ChargePointSettings:
     id: str
-    name: str | None = None
+    alias: str | None = None
     enabled: bool = False
     ocpp_version: OCPPVersion = OCPPVersion.V16
 

@@ -1,10 +1,18 @@
 const BASE = "http://localhost:5062/api/v1";
 
-/* -------- types -------- */
+/* ---------------- types ---------------- */
 export interface ChargePointInfo {
   id: string;
   ocpp_version: string;
   active: boolean;
+  alias?: string | null;
+}
+
+export interface CpSettings {
+  id: string;
+  ocpp_version: string;
+  active: boolean;
+  alias?: string | null;
 }
 
 export interface ConfigKey {
@@ -13,40 +21,51 @@ export interface ConfigKey {
   value?: string;
 }
 
-/* -------- charge-point list -------- */
-export async function fetchAllChargePoints(): Promise<ChargePointInfo[]> {
-  const r = await fetch(`${BASE}/get-all-charge-points`);
+/* ---------------- helpers ---------------- */
+async function getJson<T>(url: string, opts?: RequestInit): Promise<T> {
+  const r = await fetch(url, opts);
   if (!r.ok) throw new Error(await r.text());
-  const data = (await r.json()) as { connected: ChargePointInfo[] };
+  return r.json() as Promise<T>;
+}
+
+/* ---------------- list / settings ---------------- */
+export async function fetchAllChargePoints(
+  active?: boolean
+): Promise<ChargePointInfo[]> {
+  const qp = active === undefined ? "" : `?active=${active}`;
+  const data = await getJson<{ connected: ChargePointInfo[] }>(
+    `${BASE}/get-all-charge-points${qp}`
+  );
   return data.connected;
 }
 
-/* -------- enable / disable -------- */
-export async function setChargePointActive(
-  id: string,
-  active: boolean
-): Promise<void> {
+export async function fetchSettings(cpId: string): Promise<CpSettings> {
+  return getJson<CpSettings>(`${BASE}/charge-points/${cpId}/settings`);
+}
+
+/* ---------------- alias ---------------- */
+export async function setAlias(cpId: string, alias: string) {
+  await fetch(`${BASE}/charge-points/${cpId}/set-alias`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alias }),
+  });
+}
+
+/* ---------------- active toggle ---------------- */
+export async function setChargePointActive(id: string, active: boolean) {
   const ep = active ? "enable" : "disable";
-  const r = await fetch(`${BASE}/charge-points/${id}/${ep}`, { method: "POST" });
-  if (!r.ok) throw new Error(await r.text());
+  await fetch(`${BASE}/charge-points/${id}/${ep}`, { method: "POST" });
 }
 
-/* -------- configuration + start/stop (ongewijzigd) -------- */
+/* ---------------- configuration + start/stop ---------------- */
 export async function fetchConfiguration(cpId: string): Promise<ConfigKey[]> {
-  const r = await fetch(`${BASE}/charge-points/${cpId}/configuration`);
-  if (!r.ok) throw new Error(await r.text());
-  const data = await r.json();
-  return (
-    data.result?.configuration_key ??
-    data.configuration_key ??
-    []
-  );
+  const data = await getJson<any>(`${BASE}/charge-points/${cpId}/configuration`);
+  return data.result?.configuration_key ?? data.configuration_key ?? [];
 }
 
-export async function remoteStart(cpId: string) {
-  await fetch(`${BASE}/charge-points/${cpId}/start`, { method: "POST" });
-}
+export const remoteStart = (cpId: string) =>
+  fetch(`${BASE}/charge-points/${cpId}/start`, { method: "POST" });
 
-export async function remoteStop(cpId: string) {
-  await fetch(`${BASE}/charge-points/${cpId}/stop`, { method: "POST" });
-}
+export const remoteStop = (cpId: string) =>
+  fetch(`${BASE}/charge-points/${cpId}/stop`, { method: "POST" });
