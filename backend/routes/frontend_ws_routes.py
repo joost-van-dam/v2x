@@ -15,12 +15,12 @@ log = logging.getLogger("frontend-ws")
 def router(registry: ConnectionRegistryFrontend) -> APIRouter:
     r = APIRouter()
 
-    # ---------------------------------------------------------------- endpoint
+    # ---------------------------------------------------- FE-socket endpoint
     @r.websocket("/frontend")
     async def frontend_ws(ws: WebSocket) -> None:
         await ws.accept()
-        ws.id = str(id(ws))  # type: ignore[attr-defined]
-        await registry.register(ws)  # type: ignore[arg-type]
+        ws.id = str(id(ws))            # type: ignore[attr-defined]
+        await registry.register(ws)    # type: ignore[arg-type]
         log.info("Front-end connected: %s", ws.id)
 
         try:
@@ -31,22 +31,22 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
         finally:
             await registry.deregister(ws)  # type: ignore[arg-type]
 
-    # ---------------------------------------------------------------- broadcast-helper
+    # ---------------------------------------------------- helper: broadcast
     async def _broadcast(message: dict) -> None:
-        """Stuur JSON-event naar alle FE-sockets."""
         for fe in await registry.get_all():
             try:
                 await fe.send_text(json.dumps(message))
             except Exception:
                 await registry.deregister(fe)  # type: ignore[arg-type]
 
-    # ---------------------------------------------------------------- EventBus-bridge
+    # ---------------------------------------------------- EventBus-bridge
     def _make_handler(evt_name: str) -> Callable[..., None]:
         async def _handler(**payload):
             await _broadcast({"event": evt_name, **payload})
         return _handler
 
     for _evt in (
+        # OCPP-core events
         "MeterValues",
         "Heartbeat",
         "StatusNotification",
@@ -54,6 +54,8 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
         "StopTransaction",
         "BootNotification",
         "Authorize",
+        "ChargePointConnected",
+        "ChargePointDisconnected",
     ):
         bus.subscribe(_evt, _make_handler(_evt))
 
