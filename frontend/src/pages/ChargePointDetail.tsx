@@ -58,7 +58,7 @@ function unravelMeterValues(payload: any): SampleRow[] {
         unit: sv.unit ?? "",
         context: sv.context ?? "",
         transactionId: txId,
-      })),
+      }))
     );
   }
 
@@ -75,9 +75,9 @@ function unravelMeterValues(payload: any): SampleRow[] {
             value: sv.value ?? "",
             unit: sv.unit ?? "",
             context: sv.context ?? "",
-          }),
-        ),
-      ),
+          })
+        )
+      )
     );
     return rows;
   }
@@ -115,7 +115,7 @@ export default function ChargePointDetail() {
 
   /* ------- config ------- */
   const [config, setConfig] = useState<ConfigKey[]>([]);
-  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgLoading, setCfgLoading] = useState(true); // begint true
 
   /* ------- events ------- */
   const backendEvents = useBackendWs();
@@ -123,10 +123,16 @@ export default function ChargePointDetail() {
 
   /* ---------------- init ---------------- */
   useEffect(() => {
+    /* settings */
     fetchSettings(id).then((s) => {
       setSettings(s);
       setAliasVal(s.alias ?? "");
     });
+
+    /* configuration – eerste keer direct ophalen */
+    fetchConfiguration(id)
+      .then(setConfig)
+      .finally(() => setCfgLoading(false));
   }, [id]);
 
   /* ---------------- helpers ---------------- */
@@ -141,6 +147,22 @@ export default function ChargePointDetail() {
     await setAlias(id, aliasVal);
     setAliasEdit(false);
     setSettings((p) => (p ? { ...p, alias: aliasVal } : p));
+  };
+
+  const handleConfigChange = async (key: string, value: string) => {
+    /* na set → direct refresh zodat UI synchroon blijft */
+    await fetch(
+      `http://localhost:5062/api/v1/charge-points/${id}/commands`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ChangeConfiguration",
+          parameters: { key, value },
+        }),
+      }
+    );
+    refreshConfig();
   };
 
   /* ------- derived data ------- */
@@ -332,7 +354,10 @@ export default function ChargePointDetail() {
             {cfgLoading && <CircularProgress size={20} />}
           </Stack>
 
-          <ConfigTable configKeys={config} onConfigChange={refreshConfig} />
+          <ConfigTable
+            configKeys={config}
+            onConfigChange={handleConfigChange}
+          />
         </>
       )}
 
