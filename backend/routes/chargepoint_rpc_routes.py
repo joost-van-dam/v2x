@@ -50,9 +50,9 @@ def router(
     # ---------------------------------------------------------------- alias-endpoints
     @r.put("/charge-points/{cp_id}/set-alias")
     async def set_alias(cp_id: str, req: AliasRequest):
-        cp = await _get(cp_id)
-        cp._settings.alias = req.alias
-        return {"id": cp.id, "alias": cp._settings.alias}
+        await registry.remember_alias(cp_id, req.alias)  
+        return {"id": cp_id, "alias": req.alias}
+
 
     @r.get("/charge-points/{cp_id}/settings")
     async def get_settings(cp_id: str):

@@ -5,6 +5,8 @@ import logging
 from enum import Enum
 from typing import Any, Protocol
 
+from starlette.websockets import WebSocketDisconnect          # ← nieuw
+
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------------ #
@@ -19,10 +21,8 @@ class WebSocketChannel(Protocol):
 class IOcppEndpoint(Protocol):
     """Interface die zowel CP-v1.6 als CP-v2.0.1 implementeert."""
     id: str
-
     async def route_message(self, raw: str) -> None: ...
     async def call(self, message: Any) -> Any: ...
-
 
 # ------------------------------------------------------------------------ #
 # OCPP-versies
@@ -31,9 +31,8 @@ class OCPPVersion(str, Enum):
     V16 = "1.6"
     V201 = "2.0.1"
 
-
 # ------------------------------------------------------------------------ #
-# Instelling-placeholder
+# Instellingen
 # ------------------------------------------------------------------------ #
 class ChargePointSettings:
     id: str
@@ -41,14 +40,12 @@ class ChargePointSettings:
     enabled: bool = False
     ocpp_version: OCPPVersion = OCPPVersion.V16
 
-
 # ------------------------------------------------------------------------ #
 # Kern-domainobject
 # ------------------------------------------------------------------------ #
 class ChargePointSession:
     """
     Eén live OCPP-verbinding met een laadpaal.
-    Houdt alleen sessie-state vast; transport verloopt via `WebSocketChannel`.
     """
 
     def __init__(
@@ -77,35 +74,32 @@ class ChargePointSession:
                 await self._cp.route_message(raw)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except WebSocketDisconnect:
+            # normale disconnect → geen stack-trace
+            logger.info("WebSocket %s disconnected", self.id)
+        except Exception as exc:  # pragma: no cover
             logger.error("Error in session %s: %s", self.id, exc, exc_info=True)
         finally:
             await self.disconnect()
 
     # ------------------------------------------------------ outbound RPC
     async def send_call(self, call_obj: Any) -> Any:
-        """
-        Stuurt een OCPP-call-object en wacht op het antwoord.
-        ➜  Logt **volledig** request & response zodat we current-value-problemen
-           in NotifyReport / GetBaseReport kunnen debuggen.
-        """
         # -------- request-logging
         req_json = getattr(call_obj, "to_json", None)
-        if callable(req_json):
-            logger.info("→ CP %s | request: %s", self.id, req_json())
-        else:
-            logger.info("→ CP %s | request (repr): %s", self.id, repr(call_obj))
-
-        # -------- stuur en wacht op antwoord
+        logger.info(
+            "→ CP %s | request: %s",
+            self.id,
+            req_json() if callable(req_json) else repr(call_obj),
+        )
+        # -------- call
         response = await self._cp.call(call_obj)
-
         # -------- response-logging
         res_json = getattr(response, "to_json", None)
-        if callable(res_json):
-            logger.info("← CP %s | response: %s", self.id, res_json())
-        else:
-            logger.info("← CP %s | response (repr): %s", self.id, repr(response))
-
+        logger.info(
+            "← CP %s | response: %s",
+            self.id,
+            res_json() if callable(res_json) else repr(response),
+        )
         return response
 
     # ------------------------------------------------------- disconnect

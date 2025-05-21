@@ -90,8 +90,16 @@ def router(
         settings.ocpp_version = version
 
         session = ChargePointSession(cp_id, channel, cp_parser, settings)
+
+        # ⇩ REGISTRY ➜ alias-injectie gebeurt binnen `register`
         await registry.register(session)
-        log.info("Charge‑point connected: id=%s  proto=%s", cp_id, version.value)
+        log.info(
+            "Charge-point connected: id=%s  alias=%s  proto=%s",
+            cp_id,
+            session._settings.alias,
+            version.value,
+        )
+
 
         try:
             await session.listen()
