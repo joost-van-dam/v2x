@@ -70,7 +70,7 @@ export default function App() {
             underline="none"
             sx={{ fontWeight: 600, color: "common.white" }}
           >
-            V2X Testopstelling Debug Interface
+            OCPP Gateway / Charge Station Management System
           </Link>
         </Toolbar>
       </AppBar>
