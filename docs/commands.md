@@ -45,9 +45,6 @@ docker-compose build
 docker-compose up
 
 
-
-
-
 # 1) Bouw en start de containers
 docker compose up --build
 
