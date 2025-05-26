@@ -42,30 +42,37 @@
       name: SonarCloud Scan
       runs-on: ubuntu-latest
       needs: tests
-  
+
       steps:
         - uses: actions/checkout@v3
           with:
             fetch-depth: 0
-  
+
         - name: Set up Java (SonarScanner)
           uses: actions/setup-java@v3
           with:
             distribution: temurin
             java-version: "11"
-  
+
         - name: Cache SonarCloud packages
           uses: actions/cache@v3
           with:
             path: ~/.sonar/cache
             key: ${{ runner.os }}-sonar
-  
+
         - name: Run SonarCloud analysis
           uses: SonarSource/sonarqube-scan-action@v5
           with:
-            projectBaseDir: backend        # where your code lives
+            projectBaseDir: backend
+            # pass the mandatory properties here:
+            args: >-
+              -Dsonar.organization=joost
+              -Dsonar.projectKey=joost_v2x
+              -Dsonar.sources=.
+              -Dsonar.host.url=https://sonarcloud.io
           env:
             SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        
           
 
     docker-build:
