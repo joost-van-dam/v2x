@@ -1,0 +1,6 @@
+[run]
+# Meet alles onder je project, maar laat test-bestanden weg
+omit =
+    */tests/*
+# Gebruik paden relatief t.o.v. je project-root
+relative_files = True
