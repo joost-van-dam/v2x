@@ -4,11 +4,11 @@ on:
   push:
     paths:
       - "backend/**"
-      - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/backend.yml"
   pull_request:
     paths:
       - "backend/**"
-      - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/backend.yml"
   workflow_dispatch:
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
       - name: Run pytest with coverage
         run: |
           pytest \
-            --cov \
+            --cov=backend \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
             --junitxml=reports/junit.xml \
@@ -54,15 +54,6 @@ jobs:
         with:
           name: junit-results
           path: reports/junit.xml
-
-      - name: Upload to Codecov
-        if: ${{ secrets.CODECOV_TOKEN != '' }}
-        uses: codecov/codecov-action@v3
-        with:
-          files: coverage.xml
-          fail_ci_if_error: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   sonar:
     name: SonarCloud Scan
