@@ -46,7 +46,7 @@
       steps:
         - uses: actions/checkout@v3
           with:
-            fetch-depth: 0        # vereist door SonarCloud voor volledige historie
+            fetch-depth: 0
   
         - name: Set up Java (SonarScanner)
           uses: actions/setup-java@v3
@@ -60,12 +60,13 @@
             path: ~/.sonar/cache
             key: ${{ runner.os }}-sonar
   
-        - name: SonarCloud Scan
-          uses: SonarSource/sonarcloud-github-action@master
+        - name: Run SonarCloud analysis
+          uses: SonarSource/sonarqube-scan-action@v5
           with:
-            projectBaseDir: backend
-            organization: joost        # jouw org key in SonarCloud
-            token: ${{ secrets.SONAR_TOKEN }}
+            projectBaseDir: backend        # where your code lives
+          env:
+            SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          
 
     docker-build:
       name: Build Docker image
