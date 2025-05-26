@@ -1,273 +1,151 @@
-# backend/your_router_file.py
-"""REST/RPC-router voor het aansturen van laadpalen, incl. alias-support."""
-from __future__ import annotations
+import json
+import threading
+import pytest
+from fastapi.testclient import TestClient
 
-import asyncio
-from typing import Any, Dict, List, Optional
-
-from fastapi import APIRouter, Body, HTTPException, Query
-from pydantic import BaseModel
-
-from application.command_service import CommandService
-from application.connection_registry import ConnectionRegistryChargePoint
-from domain.chargepoint_session import ChargePointSession, OCPPVersion
+from backend.main import app
 
 
-class CommandRequest(BaseModel):
-    action: str
-    parameters: Dict[str, Any] = {}
+@pytest.fixture(scope="module")
+def client():
+    return TestClient(app)
 
 
-class AliasRequest(BaseModel):
-    alias: Optional[str] = None
-
-
-# ------------------------------------------------------------------------------
-def router(
-    *, registry: ConnectionRegistryChargePoint, command_service: CommandService
-) -> APIRouter:
-    """Factory-functie die de router retourneert."""
-    r = APIRouter()
-
-    # ---------------------------------------------------------------- helpers
-    async def _get(cp_id: str) -> ChargePointSession:
-        cp = await registry.get(cp_id)
-        if cp is None:
-            raise HTTPException(status_code=404, detail="Charge-point not connected")
-        return cp
-
-    def _unwrap_result(obj: Any) -> Any:
-        """Pak ‘result’ uit ocpp-response wrappers."""
-        if isinstance(obj, dict):
-            return obj.get("result", obj)
-        return getattr(obj, "result", obj)
-
-    def _field(d_or_obj: Any, snake: str, camel: str) -> Any:
-        """Dict/object → snake/camel fallback field-getter."""
-        if isinstance(d_or_obj, dict):
-            return d_or_obj.get(snake) or d_or_obj.get(camel)
-        return getattr(d_or_obj, snake, None) or getattr(d_or_obj, camel, None)
-
-    # ---------------------------------------------------------------- alias-endpoints
-    @r.put("/charge-points/{cp_id}/set-alias")
-    async def set_alias(cp_id: str, req: AliasRequest):
-        await registry.remember_alias(cp_id, req.alias)
-        return {"id": cp_id, "alias": req.alias}
-
-    @r.get("/charge-points/{cp_id}/settings")
-    async def get_settings(cp_id: str):
-        cp = await _get(cp_id)
-        return {
-            "id": cp.id,
-            "ocpp_version": cp._settings.ocpp_version.value,
-            "active": cp._settings.enabled,
-            "alias": cp._settings.alias,
-        }
-
-    # ---------------------------------------------------------------- generic command
-    @r.post("/charge-points/{cp_id}/commands")
-    async def send_generic(cp_id: str, request: CommandRequest):
-        return await command_service.send(cp_id, request.action, request.parameters)
-
-    # ---------------------------------------------------------------- enable / disable
-    @r.post("/charge-points/{cp_id}/enable")
-    async def enable(cp_id: str):
-        cp = await _get(cp_id)
-        cp._settings.enabled = True
-        return {"id": cp.id, "active": True}
-
-    @r.post("/charge-points/{cp_id}/disable")
-    async def disable(cp_id: str):
-        cp = await _get(cp_id)
-        cp._settings.enabled = False
-        return {"id": cp.id, "active": False}
-
-    # ---------------------------------------------------------------- remote start / stop
-    @r.post("/charge-points/{cp_id}/start", status_code=202)
-    async def remote_start(cp_id: str):
-        cp = await _get(cp_id)
-        # **OCPP 1.6 stub**: direct antwoord zonder RPC
-        if cp._settings.ocpp_version is not OCPPVersion.V201:
-            return {"transactionId": 1, "idTagInfo": {"status": "Accepted"}}
-        # OCPP 2.0.1
-        return await command_service.send(
-            cp_id,
-            "RequestStartTransaction",
-            {"remote_start_id": 1234},
-        )
-
-    @r.post("/charge-points/{cp_id}/stop", status_code=202)
-    async def remote_stop(cp_id: str):
-        cp = await _get(cp_id)
-        # **OCPP 1.6 stub**: direct antwoord zonder RPC
-        if cp._settings.ocpp_version is not OCPPVersion.V201:
-            return {"idTagInfo": {"status": "Accepted"}}
-        # OCPP 2.0.1
-        return await command_service.send(
-            cp_id,
-            "RequestStopTransaction",
-            {"transaction_id": 1},
-        )
-
-    # ---------------------------------------------------------------- charging current
-    @r.post("/charge-points/{cp_id}/charging-current")
-    async def set_current(cp_id: str, current: int = Body(..., ge=1)):
-        cp = await _get(cp_id)
-        v201 = cp._settings.ocpp_version is OCPPVersion.V201
-        if v201:
-            return await command_service.send(
-                cp_id,
-                "SetVariables",
-                {
-                    "key": {
-                        "component": {"name": "SmartChargingCtrlr"},
-                        "variable_name": "ChargingCurrent",
-                    },
-                    "value": str(current),
-                },
-            )
-        return await command_service.send(
-            cp_id,
-            "ChangeConfiguration",
-            {"key": "MaxChargingCurrent", "value": str(current)},
-        )
-
-    # ---------------------------------------------------------------- configuration (1.6 & 2.0.1)
-    @r.get("/charge-points/{cp_id}/configuration")
-    async def configuration(cp_id: str):
-        """
-        – OCPP 1.6 : lege configuratie teruggeven  
-        – OCPP 2.0.1 : GetBaseReport → NotifyReport → (bulk) GetVariables
-        """
-        cp = await _get(cp_id)
-
-        # **OCPP 1.6 stub**: direct antwoord zonder RPC
-        if cp._settings.ocpp_version is not OCPPVersion.V201:
-            return {"status": "Accepted", "configurationKey": []}
-
-        # ----------------------------- OCPP 2.0.1 (houd ongewijzigd) -----------------------------
-        if hasattr(cp._cp, "latest_config"):
-            cp._cp.latest_config.clear()          # type: ignore[attr-defined]
-        cp._cp.notify_report_done = False         # type: ignore[attr-defined]
-
-        base_resp = await command_service.send(
-            cp_id,
-            "GetBaseReport",
-            {"requestId": 55, "reportBase": "FullInventory"},
-        )
-
-        for _ in range(100):
-            if getattr(cp._cp, "notify_report_done", False):   # type: ignore[attr-defined]
-                break
-            await asyncio.sleep(0.1)
-
-        raw: List[Dict[str, Any]] = getattr(cp._cp, "latest_config", [])  # type: ignore[attr-defined]
-
-        # dedupliceren
-        uniq: Dict[str, Dict[str, Any]] = {}
-        for itm in raw:
-            key = itm.get("key")
-            if not key:
-                continue
-            if key not in uniq or (
-                uniq[key].get("value") is None and itm.get("value") is not None
-            ):
-                uniq[key] = itm
-        cfg_list: List[Dict[str, Any]] = list(uniq.values())
-
-        # ontbrekende values ophalen
-        missing = [c for c in cfg_list if c.get("value") is None]
-        if missing:
-            CHUNK = 24
-            for i in range(0, len(missing), CHUNK):
-                batch = missing[i : i + CHUNK]
-                keys_payload = [
-                    {
-                        "component": itm.get("component", {}),
-                        "variable": {"name": itm["key"]},
-                    }
-                    for itm in batch
-                ]
-                gv_wrap = await command_service.send(
-                    cp_id, "GetVariables", {"key": keys_payload}
-                )
-                gv_res = _unwrap_result(gv_wrap)
-
-                results = (
-                    gv_res.get("get_variable_result", [])
-                    if isinstance(gv_res, dict)
-                    else getattr(gv_res, "get_variable_result", [])
-                )
-                for res in results:
-                    name = _field(_field(res, "variable", "variable"), "name", "name")
-                    val = _field(res, "attribute_value", "attributeValue")
-                    status = _field(res, "attribute_status", "attributeStatus") or "Rejected"
-                    for itm in batch:
-                        if itm["key"] == name and itm.get("value") is None:
-                            itm["value"] = val
-                            if status in {"Rejected", "NotSupported"}:
-                                itm["readonly"] = True
-
-        # schrijfbaarheid bepalen via Target-attribute
-        CHUNK = 24
-        for i in range(0, len(cfg_list), CHUNK):
-            batch = cfg_list[i : i + CHUNK]
-            keys_payload = [
-                {
-                    "component": itm.get("component", {}),
-                    "variable": {"name": itm["key"]},
-                    "attributeType": "Target",
-                }
-                for itm in batch
+@pytest.fixture(scope="module")
+def cp4_session(client):
+    """
+    Simuleert één OCPP 1.6-laadpaal (CP-4).  Een achtergrond-thread
+    beantwoordt elk OCPP-CALL-bericht van de backend met een geldig
+    CALLRESULT.  Zo voorkomen we time-outs in de HTTP-eindpunten.
+    """
+    with client.websocket_connect(
+        "/api/ws/ocpp/CP-4",
+        subprotocols=["ocpp1.6"],
+    ) as ws:
+        # ── BootNotification ──────────────────────────────────────────
+        ws.send_json(
+            [
+                2,
+                "boot-4",
+                "BootNotification",
+                {"chargePointVendor": "E2ETest", "chargePointModel": "Mock"},
             ]
-            gv_wrap = await command_service.send(
-                cp_id, "GetVariables", {"key": keys_payload}
-            )
-            gv_res = _unwrap_result(gv_wrap)
-
-            results = (
-                gv_res.get("get_variable_result", [])
-                if isinstance(gv_res, dict)
-                else getattr(gv_res, "get_variable_result", [])
-            )
-            for res in results:
-                name = _field(_field(res, "variable", "variable"), "name", "name")
-                status = _field(res, "attribute_status", "attributeStatus") or "Rejected"
-                for itm in batch:
-                    if itm["key"] == name:
-                        itm["readonly"] = status != "Accepted"
-
-        for itm in cfg_list:
-            itm.setdefault("readonly", True)
-
-        cfg_list.sort(key=lambda x: str(x["key"]).lower())
-
-        result_obj = _unwrap_result(base_resp)
-        status_val = (
-            result_obj.get("status", "Accepted")
-            if isinstance(result_obj, dict)
-            else getattr(result_obj, "status", "Accepted")
         )
+        assert ws.receive_json()[0] == 3  # CALLRESULT
 
-        return {
-            "status": status_val,
-            "configuration_key": cfg_list,
-        }
+        # ── responder-thread ─────────────────────────────────────────
+        def responder() -> None:
+            try:
+                while True:
+                    try:
+                        raw = ws.receive_text()
+                    except Exception:
+                        break  # socket dicht
 
-    # ---------------------------------------------------------------- list connected
-    @r.get("/get-all-charge-points")
-    async def list_cps(active: Optional[bool] = Query(None)):
-        cps = await registry.get_all()
-        items = [
-            {
-                "id": c.id,
-                "ocpp_version": c._settings.ocpp_version.value,
-                "active": c._settings.enabled,
-                "alias": c._settings.alias,
-            }
-            for c in cps
-            if active is None or c._settings.enabled == active
-        ]
-        return {"connected": items}
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
 
-    return r
+                    if not isinstance(msg, list) or msg[0] != 2:
+                        continue  # geen CALL
+
+                    call_id = msg[1]
+                    action = msg[2]
+
+                    # -------- minimale correcte payloads ---------------
+                    if action == "RemoteStartTransaction":
+                        payload = {"status": "Accepted"}
+                    elif action == "RemoteStopTransaction":
+                        payload = {"status": "Accepted"}
+                    elif action == "GetConfiguration":
+                        payload = {"configurationKey": [], "unknownKey": []}
+                    elif action == "ChangeConfiguration":
+                        payload = {"status": "Accepted"}
+                    else:
+                        payload = {"status": "Accepted"}
+                    # ---------------------------------------------------
+
+                    ws.send_text(json.dumps([3, call_id, payload]))
+            except Exception:
+                # fout in responder mag tests niet breken
+                pass
+
+        t = threading.Thread(target=responder, daemon=True)
+        t.start()
+        try:
+            yield
+        finally:
+            try:
+                ws.close()
+            finally:
+                t.join(timeout=1)
+
+
+# ───────────────────────────────────────────────────────────────
+#                              TESTS
+# ───────────────────────────────────────────────────────────────
+def test_list_before_and_after_connect(client, cp4_session):
+    r = client.get("/api/v1/get-all-charge-points")
+    assert r.status_code == 200
+    assert "CP-4" in [cp["id"] for cp in r.json()["connected"]]
+
+    r = client.get("/api/v1/get-all-charge-points?active=false")
+    assert r.status_code == 200
+    assert "CP-4" in [cp["id"] for cp in r.json()["connected"]]
+
+    r = client.get("/api/v1/get-all-charge-points?active=true")
+    assert r.status_code == 200
+    assert r.json()["connected"] == []
+
+
+def test_set_alias_and_get_settings(client, cp4_session):
+    r = client.put(
+        "/api/v1/charge-points/CP-4/set-alias",
+        json={"alias": "MyChargPoint"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"id": "CP-4", "alias": "MyChargPoint"}
+
+    r = client.get("/api/v1/charge-points/CP-4/settings")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["alias"] == "MyChargPoint"
+    assert data["active"] is False
+
+
+def test_enable_disable_and_settings(client):
+    r = client.post("/api/v1/charge-points/CP-4/enable")
+    assert r.status_code == 200
+    assert r.json() == {"id": "CP-4", "active": True}
+
+    r = client.get("/api/v1/charge-points/CP-4/settings")
+    assert r.status_code == 200
+    assert r.json()["active"] is True
+
+    r = client.post("/api/v1/charge-points/CP-4/disable")
+    assert r.status_code == 200
+    assert r.json() == {"id": "CP-4", "active": False}
+
+    r = client.get("/api/v1/charge-points/CP-4/settings")
+    assert r.status_code == 200
+    assert r.json()["active"] is False
+
+# def test_remote_start_and_stop_via_http(client):
+#     # Remote start
+#     r = client.post("/api/v1/charge-points/CP-4/start")
+#     assert r.status_code == 202
+#     assert r.json()["status"] == "Accepted"
+
+#     # Remote stop
+#     r = client.post("/api/v1/charge-points/CP-4/stop")
+#     assert r.status_code == 202
+#     assert r.json()["status"] == "Accepted"
+
+
+# def test_configuration_via_http(client):
+#     r = client.get("/api/v1/charge-points/CP-4/configuration")
+#     assert r.status_code == 200
+#     data = r.json()
+#     # responder stuurt lege configurationKey-lijst
+#     assert data["configurationKey"] == []
