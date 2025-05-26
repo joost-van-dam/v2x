@@ -39,7 +39,7 @@
             PYTHONPATH: "./backend"      # zodat import-paden kloppen
   
     docker-build:
-      name: 🐳  Build Docker image
+      name: Build Docker image
       runs-on: ubuntu-latest
       needs: tests                      # alleen uitvoeren na succesvolle tests
   
@@ -53,17 +53,4 @@
         - name: Build backend image
           run: |
             docker build -t csms-backend:ci backend
-  
-        # --- optioneel: image als artefact voor PR's --------------
-        - name: Save image as artifact
-          if: github.event_name == 'pull_request'
-          run: |
-            docker save csms-backend:ci | gzip > csms-backend.tar.gz
-          env:
-            DOCKER_BUILDKIT: 1
-        - uses: actions/upload-artifact@v3
-          if: github.event_name == 'pull_request'
-          with:
-            name: csms-backend-image
-            path: csms-backend.tar.gz
   

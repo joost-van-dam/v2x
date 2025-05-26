@@ -58,3 +58,8 @@ docker compose up --build
 #
 # 3) Stoppen doe je met:
 # docker compose down
+
+
+
+
+tree -I '__pycache__|node_modules|venv'

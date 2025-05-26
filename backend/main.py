@@ -4,17 +4,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ---------------- Application-layer singletons ----------------
-from application.connection_registry import (
-    ConnectionRegistryChargePoint,
-    ConnectionRegistryFrontend,
-)
-from application.command_service import CommandService
-from services.influxdb_service import InfluxDBService
+from .application.connection_registry import ConnectionRegistryChargePoint, ConnectionRegistryFrontend
+from .application.command_service import CommandService
+from .services.influxdb_service import InfluxDBService
 
 # ---------------- API / transport routes ----------------
-from routes.chargepoint_ws_routes import router as chargepoint_ws_router
-from routes.chargepoint_rpc_routes import router as chargepoint_rpc_router
-from routes.frontend_ws_routes import router as frontend_ws_router
+from .routes.chargepoint_ws_routes import router as chargepoint_ws_router
+from .routes.chargepoint_rpc_routes import router as chargepoint_rpc_router
+from .routes.frontend_ws_routes import router as frontend_ws_router
 
 # ---------------------------------------------------------------------------
 # App-bootstrap
