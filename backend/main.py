@@ -1,21 +1,20 @@
+# backend/main.py
+
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ---------------- Application-layer singletons ----------------
-from .application.connection_registry import ConnectionRegistryChargePoint, ConnectionRegistryFrontend
-from .application.command_service import CommandService
-from .services.influxdb_service import InfluxDBService
+# Application-layer singletons
+from application.connection_registry import ConnectionRegistryChargePoint, ConnectionRegistryFrontend
+from application.command_service import CommandService
+from services.influxdb_service import InfluxDBService
 
-# ---------------- API / transport routes ----------------
-from .routes.chargepoint_ws_routes import router as chargepoint_ws_router
-from .routes.chargepoint_rpc_routes import router as chargepoint_rpc_router
-from .routes.frontend_ws_routes import router as frontend_ws_router
+# API / transport routes
+from routes.chargepoint_ws_routes import router as chargepoint_ws_router
+from routes.chargepoint_rpc_routes import router as chargepoint_rpc_router
+from routes.frontend_ws_routes import router as frontend_ws_router
 
-# ---------------------------------------------------------------------------
-# App-bootstrap
-# ---------------------------------------------------------------------------
 logger = logging.getLogger("csms")
 logger.setLevel(logging.INFO)
 
@@ -33,7 +32,7 @@ app = FastAPI(
     },
 )
 
-# ---------------------------------------------------- CORS / middleware ----
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,38 +41,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------------------------------ Dependency singletons ----
+# Singletons
 cp_registry = ConnectionRegistryChargePoint()
 fe_registry = ConnectionRegistryFrontend()
 command_service = CommandService(cp_registry)
-InfluxDBService()  # ↙ initialiseert + subscribe
+InfluxDBService()
 
-# ------------------------------------------- Mount the route-modules ------
-# Routers krijgen de concrete dependencies via partial application
+# Mount routers
 app.include_router(
-    chargepoint_ws_router(
-        registry=cp_registry,
-    ),
+    chargepoint_ws_router(registry=cp_registry),
     prefix="/api/ws",
     tags=["WebSocket – Charge Point"],
 )
-
 app.include_router(
-    chargepoint_rpc_router(
-        registry=cp_registry,
-        command_service=command_service,
-    ),
+    chargepoint_rpc_router(registry=cp_registry, command_service=command_service),
     prefix="/api/v1",
     tags=["RPC – Charge Point"],
 )
-
 app.include_router(
     frontend_ws_router(registry=fe_registry),
     prefix="/api/ws",
     tags=["WebSocket – Front-end"],
 )
 
-# ------------------------------------------------------------- root ------
 @app.get("/", tags=["Meta"])
 async def root() -> dict[str, str]:
     return {"message": "Welcome to the revamped CSMS API"}

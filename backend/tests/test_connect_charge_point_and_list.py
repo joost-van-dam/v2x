@@ -1,15 +1,18 @@
 # backend/tests/test_connect_charge_point_and_list.py
 
+import os
+import sys
 import json
 import pytest
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
-# Importeren van de FastAPI-app uit het backend-package
-from backend.main import app
+# Zorg dat `main.py` als module gevonden wordt
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + os.sep + ".."))
+
+from main import app
 
 @pytest.fixture(scope="module")
 def client():
-    # TestClient draait de app in‐process, dus geen aparte server nodig
     return TestClient(app)
 
 def test_root_and_empty_list(client):
@@ -29,32 +32,32 @@ def test_charge_point_connect_and_list(client):
         "/api/ws/ocpp/CP-1",
         subprotocols=["ocpp1.6"]
     ) as ws:
-        # Stuur BootNotification-call (JSON-RPC-vorm)
+        # Stuur BootNotification-call
         ws.send_json([
-            2,                         # MessageTypeId = CALL
-            "boot-1",                  # Unique call ID
-            "BootNotification",        # Action
-            {
-                "chargePointVendor": "PyTest",
-                "chargePointModel": "Mock"
-            }
+            2,                         # CALL
+            "boot-1",                  # call ID
+            "BootNotification",        # action
+            {"chargePointVendor": "PyTest", "chargePointModel": "Mock"}
         ])
 
         # Ontvang CALLRESULT
         resp = ws.receive_json()
-        # [3, call_id, { … }]
         assert isinstance(resp, list)
-        assert resp[0] == 3          # MessageTypeId = CALLRESULT
+        assert resp[0] == 3          # CALLRESULT
         assert resp[1] == "boot-1"
         assert resp[2]["status"] == "Accepted"
 
-    # Na WS-close moet registry zijn bijgewerkt
+        # **Nu**, terwijl WS nog open is, staat CP-1 in de registry
+        r = client.get("/api/v1/get-all-charge-points")
+        assert r.status_code == 200
+        data = r.json()["connected"]
+        assert len(data) == 1
+        cp = data[0]
+        assert cp["id"] == "CP-1"
+        assert cp["ocpp_version"] == "1.6"
+        assert cp["active"] is False
+
+    # Na het sluiten van de WS is de sessie uit de registry verwijderd
     r = client.get("/api/v1/get-all-charge-points")
     assert r.status_code == 200
-    data = r.json()["connected"]
-
-    assert len(data) == 1
-    cp = data[0]
-    assert cp["id"] == "CP-1"
-    assert cp["ocpp_version"] == "1.6"
-    assert cp["active"] is False  # standaard enabled=False
+    assert r.json() == {"connected": []}

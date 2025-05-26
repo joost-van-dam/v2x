@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ocpp.routing import on                            # type: ignore
@@ -45,7 +45,7 @@ class V16Handler(_BaseV16):
             vendor=charge_point_vendor,
         )
         return _res16.BootNotification(
-            current_time=datetime.utcnow().isoformat(),
+            current_time=datetime.now(timezone.utc).isoformat(),
             interval=10,
             status="Accepted",
         )
@@ -53,8 +53,9 @@ class V16Handler(_BaseV16):
     # ---------------- Heartbeat
     @on("Heartbeat")
     async def on_heartbeat(self):
-        await _publish("Heartbeat", self.id, "1.6", ts=datetime.utcnow().isoformat())
-        return _res16.Heartbeat(current_time=datetime.utcnow().isoformat())
+        now_ts = datetime.now(timezone.utc).isoformat()
+        await _publish("Heartbeat", self.id, "1.6", ts=now_ts)
+        return _res16.Heartbeat(current_time=now_ts)
 
     # ---------------- Authorize
     @on("Authorize")
@@ -135,7 +136,7 @@ class V201Handler(_BaseV201):
             station=charging_station,
         )
         return _res201.BootNotification(
-            current_time=datetime.utcnow().isoformat(),
+            current_time=datetime.now(timezone.utc).isoformat(),
             interval=10,
             status="Accepted",
         )
@@ -143,8 +144,9 @@ class V201Handler(_BaseV201):
     # ---------------- Heartbeat
     @on("Heartbeat")
     async def on_heartbeat(self):
-        await _publish("Heartbeat", self.id, "2.0.1", ts=datetime.utcnow().isoformat())
-        return _res201.Heartbeat(current_time=datetime.utcnow().isoformat())
+        now_ts = datetime.now(timezone.utc).isoformat()
+        await _publish("Heartbeat", self.id, "2.0.1", ts=now_ts)
+        return _res201.Heartbeat(current_time=now_ts)
 
     # ---------------- Status / Tx / Meter
     @on("StatusNotification")
@@ -210,8 +212,7 @@ class V201Handler(_BaseV201):
                     {
                         "key": name,
                         "value": best_attr.get("value"),
-                        "readonly": best_attr.get("mutability", "ReadOnly")
-                        == "ReadOnly",
+                        "readonly": best_attr.get("mutability", "ReadOnly") == "ReadOnly",
                         # extra velden voor debugging / UI
                         "mutability": best_attr.get("mutability"),
                         "persistent": best_attr.get("persistent"),
@@ -234,14 +235,13 @@ class V201Handler(_BaseV201):
         try:
             log.debug(
                 "[NotifyReport] CP=%s  seqNo=%s  tbc=%s  items=%s",
-                self.id,
-                seq_no,
-                tbc,
-                len(report_data),
+                self.id, seq_no, tbc, len(report_data),
             )
-            # log alléén 1e item om spam te voorkomen
             if report_data:
-                log.debug("[NotifyReport] first item: %s", json.dumps(report_data[0], indent=2)[:400])
+                log.debug(
+                    "[NotifyReport] first item: %s",
+                    json.dumps(report_data[0], indent=2)[:400]
+                )
         except Exception:  # pragma: no cover
             pass
         # ====================================================================
