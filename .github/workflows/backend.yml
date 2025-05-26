@@ -33,11 +33,11 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run pytest with coverage
-        working-directory: backend
         run: |
-          pytest --cov=. \
-                 --cov-report=xml:coverage.xml \
-                 --cov-config=../.coveragerc
+          pytest \
+            --cov=backend \
+            --cov-report=xml:backend/coverage.xml \
+            --cov-config=.coveragerc
 
   sonar:
     name: SonarCloud Scan
@@ -45,7 +45,8 @@ jobs:
     needs: tests
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -68,7 +69,8 @@ jobs:
           args: >-
             -Dsonar.organization=joost
             -Dsonar.projectKey=joost_v2x
-            -Dsonar.sources=.
+            -Dsonar.sources=application,domain,infrastructure,routes,services
+            -Dsonar.tests=tests
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.host.url=https://sonarcloud.io
         env:
