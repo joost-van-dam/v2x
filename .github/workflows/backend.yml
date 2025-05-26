@@ -33,6 +33,7 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run pytest with coverage
+        # Vanuit de repo-root, meet alles onder backend/
         run: |
           pytest \
             --cov=backend \
@@ -50,7 +51,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Java (SonarScanner)
+      - name: Set up Java
         uses: actions/setup-java@v3
         with:
           distribution: temurin
@@ -65,13 +66,17 @@ jobs:
       - name: Run SonarCloud analysis
         uses: SonarSource/sonarqube-scan-action@v5
         with:
-          projectBaseDir: backend
+          # Let op: baseDir is de ROOT van je repo, niet `backend`
+          projectBaseDir: .
           args: >-
             -Dsonar.organization=joost
             -Dsonar.projectKey=joost_v2x
-            -Dsonar.sources=application,domain,infrastructure,routes,services
-            -Dsonar.tests=tests
-            -Dsonar.python.coverage.reportPaths=coverage.xml
+            # Specificeer wáár je product-code staat:
+            -Dsonar.sources=backend/application,backend/domain,backend/infrastructure,backend/routes,backend/services
+            # En wáár je tests staan:
+            -Dsonar.tests=backend/tests
+            # Wijs naar het door pytest gemaakte report
+            -Dsonar.python.coverage.reportPaths=backend/coverage.xml
             -Dsonar.host.url=https://sonarcloud.io
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
