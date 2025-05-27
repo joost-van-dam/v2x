@@ -3,20 +3,45 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from application.command_service import CommandService
+
+# ------------------------------------------------------------------------------
+# Mock CommandService.send for all tests
+# ------------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def mock_command_service(monkeypatch):
+    """
+    Mock alle OCPP-calls zodat start/stop/configuration direct Accepted/empty teruggeven
+    zonder echte WebSocket-interactie.
+    """
+    async def fake_send(self, cp_id: str, action: str, params: dict):
+        # Remote start/stop
+        if action in {
+            "RemoteStartTransaction", "RequestStartTransaction",
+            "RemoteStopTransaction",  "RequestStopTransaction"
+        }:
+            return {"status": "Accepted"}
+        # Configuration for OCPP 1.6
+        if action == "GetConfiguration":
+            return {"configurationKey": []}
+        # Fallback: lege dict
+        return {}
+
+    monkeypatch.setattr(CommandService, "send", fake_send)
 
 
 @pytest.fixture(scope="module")
 def client():
+    from backend.main import app
     return TestClient(app)
 
 
 @pytest.fixture(scope="module")
 def cp4_session(client):
     """
-    Simuleert één OCPP 1.6-laadpaal (CP-4).  Een achtergrond-thread
+    Simuleert één OCPP 1.6-laadpaal (CP-4). Een achtergrond-thread
     beantwoordt elk OCPP-CALL-bericht van de backend met een geldig
-    CALLRESULT.  Zo voorkomen we time-outs in de HTTP-eindpunten.
+    CALLRESULT. Zo voorkomen we time-outs in de HTTP-eindpunten.
     """
     with client.websocket_connect(
         "/api/ws/ocpp/CP-4",
@@ -31,7 +56,8 @@ def cp4_session(client):
                 {"chargePointVendor": "E2ETest", "chargePointModel": "Mock"},
             ]
         )
-        assert ws.receive_json()[0] == 3  # CALLRESULT
+        resp = ws.receive_json()
+        assert resp[0] == 3  # CALLRESULT
 
         # ── responder-thread ─────────────────────────────────────────
         def responder() -> None:
@@ -48,12 +74,12 @@ def cp4_session(client):
                         continue
 
                     if not isinstance(msg, list) or msg[0] != 2:
-                        continue  # geen CALL
+                        continue  # niet een CALL
 
                     call_id = msg[1]
                     action = msg[2]
 
-                    # -------- minimale correcte payloads ---------------
+                    # Minimale correcte payloads
                     if action == "RemoteStartTransaction":
                         payload = {"status": "Accepted"}
                     elif action == "RemoteStopTransaction":
@@ -64,12 +90,10 @@ def cp4_session(client):
                         payload = {"status": "Accepted"}
                     else:
                         payload = {"status": "Accepted"}
-                    # ---------------------------------------------------
 
                     ws.send_text(json.dumps([3, call_id, payload]))
             except Exception:
-                # fout in responder mag tests niet breken
-                pass
+                pass  # fouten in de responder mogen tests niet breken
 
         t = threading.Thread(target=responder, daemon=True)
         t.start()
@@ -131,21 +155,22 @@ def test_enable_disable_and_settings(client):
     assert r.status_code == 200
     assert r.json()["active"] is False
 
-# def test_remote_start_and_stop_via_http(client):
-#     # Remote start
-#     r = client.post("/api/v1/charge-points/CP-4/start")
-#     assert r.status_code == 202
-#     assert r.json()["status"] == "Accepted"
 
-#     # Remote stop
-#     r = client.post("/api/v1/charge-points/CP-4/stop")
-#     assert r.status_code == 202
-#     assert r.json()["status"] == "Accepted"
+def test_remote_start_and_stop_via_http(client):
+    # Remote start
+    r = client.post("/api/v1/charge-points/CP-4/start")
+    assert r.status_code == 202
+    assert r.json()["status"] == "Accepted"
+
+    # Remote stop
+    r = client.post("/api/v1/charge-points/CP-4/stop")
+    assert r.status_code == 202
+    assert r.json()["status"] == "Accepted"
 
 
-# def test_configuration_via_http(client):
-#     r = client.get("/api/v1/charge-points/CP-4/configuration")
-#     assert r.status_code == 200
-#     data = r.json()
-#     # responder stuurt lege configurationKey-lijst
-#     assert data["configurationKey"] == []
+def test_configuration_via_http(client):
+    r = client.get("/api/v1/charge-points/CP-4/configuration")
+    assert r.status_code == 200
+    data = r.json()
+    # responder stuurt lege configurationKey-lijst
+    assert data["configurationKey"] == []
