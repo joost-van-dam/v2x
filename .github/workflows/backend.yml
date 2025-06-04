@@ -90,7 +90,6 @@ jobs:
             -Dsonar.objc.file.suffixes=-
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        
 
   docker-build:
     name: Build Docker image
