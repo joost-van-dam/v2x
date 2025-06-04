@@ -20,6 +20,19 @@ class CommandRequest(BaseModel):
 class AliasRequest(BaseModel):
     alias: Optional[str] = None
 
+class RemoteStartRequest(BaseModel):
+    """
+    Optionele velden – precies de waardes die de CP nodig heeft.
+    • Bij OCPP 1.6 is *connector_id* optioneel
+    • Bij OCPP 2.0.1 is *remote_start_id* optioneel
+    """
+    id_tag: str = "DEFAULT_TAG"
+    connector_id: Optional[int] = None
+    remote_start_id: Optional[int] = None
+
+
+class RemoteStopRequest(BaseModel):
+    transaction_id: int = 1
 
 # ------------------------------------------------------------------------------
 def router(
@@ -84,22 +97,48 @@ def router(
 
     # ---------------------------------------------------------------- remote start / stop
     @r.post("/charge-points/{cp_id}/start", status_code=202)
-    async def remote_start(cp_id: str):
+    async def remote_start(
+        cp_id: str,
+        req: Optional[RemoteStartRequest] = Body(None),
+    ):
+        """
+        • Body is optioneel; zonder body krijg je de standaard-waardes uit het model.
+        • connector_id wordt **alleen** meegestuurd als de client er expliciet
+          om vraagt – dit gedraagt zich identiek aan de oude implementatie.
+        """
+        if req is None:
+            req = RemoteStartRequest()
+
         cp = await _get(cp_id)
         v201 = cp._settings.ocpp_version is OCPPVersion.V201
         action = "RequestStartTransaction" if v201 else "RemoteStartTransaction"
-        params = {
-            "id_tag": "DEFAULT_TAG",
-            **({"remote_start_id": 1234} if v201 else {"connector_id": 1}),
-        }
+
+        params: Dict[str, Any] = {"id_tag": req.id_tag}
+
+        if v201:
+            # OCPP 2.0.1: remote_start_id meenemen (of default 1234)
+            params["remote_start_id"] = req.remote_start_id or 1234
+        elif req.connector_id is not None:
+            # OCPP 1.6: connector_id alleen doorgeven als expliciet opgegeven
+            params["connector_id"] = req.connector_id
+
         return await command_service.send(cp_id, action, params)
 
     @r.post("/charge-points/{cp_id}/stop", status_code=202)
-    async def remote_stop(cp_id: str):
+    async def remote_stop(
+        cp_id: str,
+        req: Optional[RemoteStopRequest] = Body(None),
+    ):
+        """
+        transaction_id is vereist door OCPP – standaard op 1 voor backwards
+        compatibility met de oude code, maar de caller kan ’m nu makkelijk
+        overschrijven.
+        """
+        tx_id = req.transaction_id if req else 1
         cp = await _get(cp_id)
         v201 = cp._settings.ocpp_version is OCPPVersion.V201
         action = "RequestStopTransaction" if v201 else "RemoteStopTransaction"
-        return await command_service.send(cp_id, action, {"transaction_id": 1})
+        return await command_service.send(cp_id, action, {"transaction_id": tx_id})
 
     # ---------------------------------------------------------------- charging current
     @r.post("/charge-points/{cp_id}/charging-current")
