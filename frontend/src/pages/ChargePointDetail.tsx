@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import {
   Typography,
   Button,
   Tabs,
   Tab,
-  Box,
   Stack,
   TextField,
   IconButton,
@@ -16,6 +15,8 @@ import {
   TableCell,
   TableBody,
   CircularProgress,
+  Snackbar,
+  Alert,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
@@ -31,6 +32,31 @@ import ConfigTable from "../ui/ConfigTable";
 import useBackendWs from "../hooks/useBackendWs";
 import type { BackendEvent } from "../hooks/useBackendWs";
 import EventLogPanel from "../ui/EventLogPanel";
+
+/* ------------------------------------------------ snackbar helper ------ */
+const useSnack = () => {
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const show = useCallback((m: string) => {
+    setMsg(m);
+    setOpen(true);
+  }, []);
+  return {
+    Snack: (
+      <Snackbar
+        open={open}
+        autoHideDuration={2500}
+        onClose={() => setOpen(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="success" variant="filled" sx={{ width: "100%" }}>
+          {msg}
+        </Alert>
+      </Snackbar>
+    ),
+    show,
+  };
+};
 
 /* ------------------------------------------------ helpers ------ */
 interface SampleRow {
@@ -108,6 +134,9 @@ export default function ChargePointDetail() {
   const { id = "" } = useParams();
   const [tab, setTab] = useState(0);
 
+  /* ------- snackbar ------- */
+  const { Snack, show } = useSnack();
+
   /* ------- settings ------- */
   const [settings, setSettings] = useState<CpSettings>();
   const [aliasEdit, setAliasEdit] = useState(false);
@@ -115,7 +144,7 @@ export default function ChargePointDetail() {
 
   /* ------- config ------- */
   const [config, setConfig] = useState<ConfigKey[]>([]);
-  const [cfgLoading, setCfgLoading] = useState(true); // begint true
+  const [cfgLoading, setCfgLoading] = useState(true);
 
   /* ------- events ------- */
   const backendEvents = useBackendWs();
@@ -123,47 +152,51 @@ export default function ChargePointDetail() {
 
   /* ---------------- init ---------------- */
   useEffect(() => {
-    /* settings */
     fetchSettings(id).then((s) => {
       setSettings(s);
       setAliasVal(s.alias ?? "");
     });
 
-    /* configuration – eerste keer direct ophalen */
     fetchConfiguration(id)
       .then(setConfig)
       .finally(() => setCfgLoading(false));
   }, [id]);
 
   /* ---------------- helpers ---------------- */
-  const refreshConfig = () => {
+  const refreshConfig = useCallback(() => {
     setCfgLoading(true);
     fetchConfiguration(id)
       .then(setConfig)
       .finally(() => setCfgLoading(false));
-  };
+  }, [id]);
 
   const handleAliasSave = async () => {
     await setAlias(id, aliasVal);
     setAliasEdit(false);
     setSettings((p) => (p ? { ...p, alias: aliasVal } : p));
+    show("Alias saved");
   };
 
   const handleConfigChange = async (key: string, value: string) => {
-    /* na set → direct refresh zodat UI synchroon blijft */
-    await fetch(
-      `http://localhost:5062/api/v1/charge-points/${id}/commands`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "ChangeConfiguration",
-          parameters: { key, value },
-        }),
-      }
-    );
+    await fetch(`http://localhost:5062/api/v1/charge-points/${id}/commands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "ChangeConfiguration",
+        parameters: { key, value },
+      }),
+    });
+    show("Configuration updated");
     refreshConfig();
   };
+
+  /* ------- react on backend config events ------- */
+  useEffect(() => {
+    const last = cpEvents.at(-1);
+    if (last?.event === "ConfigurationChanged") {
+      show("Configuration changed (CP)");
+    }
+  }, [cpEvents, show]);
 
   /* ------- derived data ------- */
   const lastByType: BackendEvent[] = useMemo(() => {
@@ -184,18 +217,31 @@ export default function ChargePointDetail() {
   /* ---------------- render ---------------- */
   if (!settings) return <CircularProgress />;
 
+  const tabSx = {
+    fontSize: 16,
+    fontWeight: 600,
+    textTransform: "none" as const,
+    minWidth: 160,
+    "&:hover": { bgcolor: "action.hover" },
+  };
+
   return (
     <>
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
-        <Tab label="Status & control" />
-        <Tab label="Configuration" />
-        <Tab label="WebSocket events" />
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mb: 3 }}
+        textColor="primary"
+        indicatorColor="primary"
+      >
+        <Tab label="Status & control" sx={tabSx} />
+        <Tab label="Configuration" sx={tabSx} />
+        <Tab label="WebSocket events" sx={tabSx} />
       </Tabs>
 
       {/* ---------------------------------------------------------------- */}
       {tab === 0 && (
         <>
-          {/* ------- header / actions ------- */}
           <Stack
             direction={{ xs: "column", sm: "row" }}
             alignItems="center"
@@ -209,20 +255,25 @@ export default function ChargePointDetail() {
             <Button
               variant="contained"
               color="success"
-              onClick={() => remoteStart(id)}
+              onClick={async () => {
+                await remoteStart(id);
+                show("Remote-start sent");
+              }}
             >
               Remote Start
             </Button>
             <Button
               variant="contained"
               color="secondary"
-              onClick={() => remoteStop(id)}
+              onClick={async () => {
+                await remoteStop(id);
+                show("Remote-stop sent");
+              }}
             >
               Remote Stop
             </Button>
           </Stack>
 
-          {/* ------- settings overview ------- */}
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
             <Typography variant="subtitle1" gutterBottom>
               Settings
@@ -272,7 +323,6 @@ export default function ChargePointDetail() {
             </Table>
           </Paper>
 
-          {/* ------- latest events ------- */}
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
             <Typography variant="subtitle1" gutterBottom>
               Latest events
@@ -281,9 +331,7 @@ export default function ChargePointDetail() {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 600, width: "30%" }}>
-                    Event
-                  </TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: "30%" }}>Event</TableCell>
                   <TableCell sx={{ fontWeight: 600 }}>Value / Info</TableCell>
                 </TableRow>
               </TableHead>
@@ -298,7 +346,6 @@ export default function ChargePointDetail() {
             </Table>
           </Paper>
 
-          {/* ------- MeterValues ------- */}
           {sortedRows.length > 0 && (
             <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
               <Typography variant="subtitle1" gutterBottom>
@@ -323,7 +370,6 @@ export default function ChargePointDetail() {
                     ))}
                   </TableRow>
                 </TableHead>
-
                 <TableBody>
                   {sortedRows.map((row, i) => (
                     <TableRow key={i}>
@@ -343,7 +389,6 @@ export default function ChargePointDetail() {
         </>
       )}
 
-      {/* ---------------------------------------------------------------- */}
       {tab === 1 && (
         <>
           <Stack direction="row" alignItems="center" spacing={2} mb={2}>
@@ -354,14 +399,10 @@ export default function ChargePointDetail() {
             {cfgLoading && <CircularProgress size={20} />}
           </Stack>
 
-          <ConfigTable
-            configKeys={config}
-            onConfigChange={handleConfigChange}
-          />
+          <ConfigTable configKeys={config} onConfigChange={handleConfigChange} />
         </>
       )}
 
-      {/* ---------------------------------------------------------------- */}
       {tab === 2 && (
         <>
           <Typography variant="subtitle1" gutterBottom>
@@ -376,6 +417,8 @@ export default function ChargePointDetail() {
           />
         </>
       )}
+
+      {Snack}
     </>
   );
 }

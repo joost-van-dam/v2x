@@ -1,28 +1,31 @@
 """
 Facade tussen REST-laag en OCPP-sessies.
 
-Wijzigingen
------------
-• Extra checks zodat we *geen* RPC sturen zodra de WebSocket al dicht is
-  (of de sessie al is beëindigd).  Dit voorkomt de RuntimeError én lost de
-  race-condition op waarin het HTTP-request nog binnenkomt terwijl het
-  backend-kanaal al aan het afsluiten is.
-• Heldere HTTP-errors:
-    - 404  – geen (actieve) sessie
-    - 503  – sessie viel weg tijdens het verzoek
-    - 504  – charge-point antwoordt niet (timeout)
+Wijzigingen  • 4 jun 2025  
+────────────
+• Na een geslaagde ChangeConfiguration / SetVariables wordt er nu een
+  **ConfigurationChanged**-event gepubliceerd op de EventBus.
+• Kleine refactor: bus-import toegevoegd, zodat we overal central kunnen
+  loggen/broadcasten.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import HTTPException
 
 from application.connection_registry import ConnectionRegistryChargePoint
+from application.event_bus import bus                  # ★  nieuw
 from domain.chargepoint_session import ChargePointSession, OCPPVersion
-from application.ocpp_command_strategy import V16CommandStrategy, V201CommandStrategy
+from application.ocpp_command_strategy import (
+    V16CommandStrategy,
+    V201CommandStrategy,
+)
+
+log = logging.getLogger(__name__)
 
 
 class CommandService:
@@ -57,18 +60,31 @@ class CommandService:
         try:
             result = await session.send_call(ocpp_call)
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             raise HTTPException(
                 status_code=504,
                 detail="Charge-point did not respond (timeout).",
-            ) from None
+            ) from exc
 
-        except RuntimeError:
+        except RuntimeError as exc:
             # WebSocket is tijdens de call dichtgegaan
             await self._registry.deregister(session)
             raise HTTPException(
                 status_code=503,
                 detail="Charge-point disconnected while processing the request.",
-            ) from None
+            ) from exc
+
+        # ............. event voor config-wijzigingen .....................
+        if action in {"ChangeConfiguration", "SetVariables"}:
+            try:
+                await bus.publish(
+                    "ConfigurationChanged",
+                    charge_point_id=cp_id,
+                    ocpp_action=action,
+                    parameters=parameters,
+                    result=str(result),
+                )
+            except Exception:  # pragma: no cover
+                log.error("Unable to publish ConfigurationChanged", exc_info=True)
 
         return {"result": result}

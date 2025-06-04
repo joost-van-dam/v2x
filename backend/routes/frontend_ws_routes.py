@@ -56,6 +56,7 @@ def router(registry: ConnectionRegistryFrontend) -> APIRouter:
         "Authorize",
         "ChargePointConnected",
         "ChargePointDisconnected",
+        "ConfigurationChanged",
     ):
         bus.subscribe(_evt, _make_handler(_evt))
 
