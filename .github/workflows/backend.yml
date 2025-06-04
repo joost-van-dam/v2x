@@ -13,7 +13,7 @@ on:
 
 jobs:
   tests:
-    name: Run tests
+    name: Run tests & collect coverage
     runs-on: ubuntu-latest
 
     steps:
@@ -35,9 +35,16 @@ jobs:
       - name: Run pytest with coverage
         working-directory: backend
         run: |
+          mkdir -p TestResults
           pytest --cov=. \
-                 --cov-report=xml:coverage.xml \
+                 --cov-report=xml:TestResults/coverage.xml \
                  --cov-config=../.coveragerc
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: backend/TestResults/coverage.xml
 
   sonar:
     name: SonarCloud Scan
@@ -45,11 +52,12 @@ jobs:
     needs: tests
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Set up Java (SonarScanner)
+      - name: Set up Java for SonarScanner
         uses: actions/setup-java@v3
         with:
           distribution: temurin
@@ -61,6 +69,12 @@ jobs:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
 
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage-report
+          path: backend/TestResults
+
       - name: Run SonarCloud analysis
         uses: SonarSource/sonarqube-scan-action@v5
         with:
@@ -69,7 +83,7 @@ jobs:
             -Dsonar.organization=joost
             -Dsonar.projectKey=joost_v2x
             -Dsonar.sources=.
-            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.python.coverage.reportPaths=TestResults/coverage.xml
             -Dsonar.host.url=https://sonarcloud.io
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
