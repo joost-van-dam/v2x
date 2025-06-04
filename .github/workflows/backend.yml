@@ -46,50 +46,50 @@ jobs:
           name: coverage-report
           path: backend/TestResults/coverage.xml
 
-      sonar:
-        name: SonarCloud Scan
-        runs-on: ubuntu-latest
-        needs: tests
-    
-        steps:
-          - name: Checkout repo
-            uses: actions/checkout@v3
-            with:
-              fetch-depth: 0
-    
-          - name: Set up Java for SonarScanner
-            uses: actions/setup-java@v3
-            with:
-              distribution: temurin
-              java-version: "11"
-    
-          - name: Cache SonarCloud packages
-            uses: actions/cache@v3
-            with:
-              path: ~/.sonar/cache
-              key: ${{ runner.os }}-sonar
-    
-          - name: Download coverage artifact
-            uses: actions/download-artifact@v4
-            with:
-              name: coverage-report
-              path: backend/TestResults
-    
-          - name: Run SonarCloud analysis
-            uses: SonarSource/sonarqube-scan-action@v5
-            with:
-              projectBaseDir: backend
-              args: >-
-                -Dsonar.organization=joost
-                -Dsonar.projectKey=joost_v2x
-                -Dsonar.sources=.
-                -Dsonar.python.coverage.reportPaths=TestResults/coverage.xml
-                -Dsonar.host.url=https://sonarcloud.io
-                -Dsonar.c.file.suffixes=- 
-                -Dsonar.cpp.file.suffixes=- 
-                -Dsonar.objc.file.suffixes=-
-            env:
-              SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  sonar:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java for SonarScanner
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/TestResults
+
+      - name: Run SonarCloud analysis
+        uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          projectBaseDir: backend
+          args: >-
+            -Dsonar.organization=joost
+            -Dsonar.projectKey=joost_v2x
+            -Dsonar.sources=.
+            -Dsonar.python.coverage.reportPaths=TestResults/coverage.xml
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.c.file.suffixes=- 
+            -Dsonar.cpp.file.suffixes=- 
+            -Dsonar.objc.file.suffixes=-
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         
 
   docker-build:
