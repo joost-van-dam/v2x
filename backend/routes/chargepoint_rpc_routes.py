@@ -177,9 +177,8 @@ def router(
             return await command_service.send(cp_id, "GetConfiguration", {"key": []})
 
         # ----------------------------- OCPP 2.0.1 ---------------------------
-        # buffers leegmaken
-        if hasattr(cp._cp, "latest_config"):
-            cp._cp.latest_config.clear()          # type: ignore[attr-defined]
+        # buffers leegmaken (NIET meer verwijderen van latest_config)
+        # Alleen de notify-flag terugzetten
         cp._cp.notify_report_done = False         # type: ignore[attr-defined]
 
         # FullInventory-report opvragen
