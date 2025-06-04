@@ -11,7 +11,7 @@ class FakeWebSocket:
         self._recv_buffer = []
         # Captured messages from send_text()
         self.sent_messages = []
-        # Simulate application_state: can be WebSocketState.CONNECTED, CLOSED, DISCONNECTED, etc.
+        # Simulate application_state: can be WebSocketState.CONNECTED or DISCONNECTED
         self.application_state = WebSocketState.CONNECTED
         # Simulated client tuple
         self.client = ("127.0.0.1", 12345)
@@ -22,7 +22,7 @@ class FakeWebSocket:
         """Return next queued text or block if none."""
         if self._recv_buffer:
             return self._recv_buffer.pop(0)
-        # Simulate waiting for a message: but to test, we can raise after a short timeout
+        # Simulate waiting for a message: but to test, we can raise after a short sleep
         await asyncio.sleep(0.01)
         raise RuntimeError("No message to receive")
 
@@ -30,10 +30,9 @@ class FakeWebSocket:
         self.sent_messages.append(message)
 
     async def close(self, code: int = None):
-        # Record that close was called with this code
-        self.application_state = WebSocketState.CLOSED
+        # Set application_state to DISCONNECTED instead of CLOSED
+        self.application_state = WebSocketState.DISCONNECTED
         self.closed_with_code = code
-
 
 # ---------------------------- TESTS ----------------------------
 
@@ -56,31 +55,24 @@ async def test_send_delegates_to_send_text():
     assert fake_ws.sent_messages == ["test-message"]
 
 @pytest.mark.asyncio
-async def test_close_only_if_not_already_closed_or_disconnected():
+async def test_close_only_if_not_already_disconnected():
     fake_ws = FakeWebSocket()
     adapter = FastAPIWebSocketAdapter(fake_ws)
 
     # Case 1: application_state is CONNECTED → close should be called
     fake_ws.application_state = WebSocketState.CONNECTED
     await adapter.close(1001)
-    assert fake_ws.application_state == WebSocketState.CLOSED
+    assert fake_ws.application_state == WebSocketState.DISCONNECTED
     assert fake_ws.closed_with_code == 1001
 
     # Reset for next case
     fake_ws = FakeWebSocket()
     adapter = FastAPIWebSocketAdapter(fake_ws)
 
-    # Case 2: application_state is already CLOSED → close() should not be called again
-    fake_ws.application_state = WebSocketState.CLOSED
+    # Case 2: application_state is already DISCONNECTED → close() should not be called again
+    fake_ws.application_state = WebSocketState.DISCONNECTED
     await adapter.close(1002)
     # closed_with_code remains None because .close wasn't invoked
-    assert fake_ws.closed_with_code is None
-
-    # Case 3: application_state is DISCONNECTED → close() should not be called
-    fake_ws = FakeWebSocket()
-    adapter = FastAPIWebSocketAdapter(fake_ws)
-    fake_ws.application_state = WebSocketState.DISCONNECTED
-    await adapter.close(1003)
     assert fake_ws.closed_with_code is None
 
 def test_client_property_exposes_underlying_ws_client():
