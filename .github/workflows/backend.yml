@@ -57,30 +57,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Java for SonarScanner
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+
       - name: Download coverage artifact
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
           path: backend/TestResults
 
-      - name: Set up Java (for SonarCloud)
-        uses: actions/setup-java@v3
+      - name: Run SonarCloud analysis
+        uses: SonarSource/sonarqube-scan-action@v5
         with:
-          distribution: temurin
-          java-version: "11"
-
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v1
-        with:
-          organization: joost                    # jouw SonarCloud-organisatie
-          projectKey: joost_v2x                  # jouw SonarCloud-projectkey
-          projectBaseDir: backend               # we scannen enkel de “backend” folder
-          token: ${{ secrets.SONAR_TOKEN }}
-          extraProperties: |
-            # Python-coverage rapport, relatief t.o.v. backend/
-            sonar.python.coverage.reportPaths=TestResults/coverage.xml
-            # sluit testbestanden uit van de hoofdbron (optioneel)
-            sonar.exclusions=tests/**
+          projectBaseDir: backend
+          args: >-
+            -Dsonar.organization=joost
+            -Dsonar.projectKey=joost_v2x
+            -Dsonar.sources=.
+            -Dsonar.python.coverage.reportPaths=TestResults/coverage.xml
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.c.file.suffixes=- 
+            -Dsonar.cpp.file.suffixes=- 
+            -Dsonar.objc.file.suffixes=-
+            -Dsonar.exclusions=tests/** 
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   docker-build:
     name: Build Docker image
