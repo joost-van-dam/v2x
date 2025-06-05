@@ -63,3 +63,9 @@ docker compose up --build
 
 
 tree -I '__pycache__|node_modules|venv'
+
+
+influxdb
+http://localhost:8086
+login: admin
+password: adminadmin
