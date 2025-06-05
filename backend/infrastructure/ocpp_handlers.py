@@ -1,4 +1,11 @@
-"""Version-specifieke OCPP-handler-klassen + EventBus-bridge."""
+"""Version-specifieke OCPP-handler-klassen + EventBus-bridge.
+
+⚠️  LET OP:
+Deze module bevat de volledige, bijgewerkte versie inclusief een handler
+voor **SecurityEventNotification** voor zowel OCPP 1.6 als 2.0.1.  Alleen
+hiermee is de runtime‑error verholpen; de rest van de structuur is intact
+gebleven.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +27,7 @@ log = logging.getLogger(__name__)
 
 
 async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
+    """Gemakkelijk wrappertje om events op de centrale EventBus te pushen."""
     await bus.publish(
         event,
         charge_point_id=cp_id,
@@ -29,10 +37,10 @@ async def _publish(event: str, cp_id: str, ocpp_version: str, **payload):
 
 
 # ---------------------------------------------------------------------------
-# OCPP 1.6
+# OCPP 1.6
 # ---------------------------------------------------------------------------
 class V16Handler(_BaseV16):
-    """Basis-handlers voor OCPP 1.6."""
+    """Basis‑handlers voor OCPP 1.6 (incl. extension‑messages)."""
 
     # ---------------- BootNotification
     @on("BootNotification")
@@ -114,15 +122,22 @@ class V16Handler(_BaseV16):
         await _publish("MeterValues", self.id, "1.6", **kw)
         return _res16.MeterValues()
 
+    # ---------------- SecurityEventNotification  ← NIEUW
+    @on("SecurityEventNotification")
+    async def on_security_event_notification(self, **kw: Any):
+        """Vangt security‑events af; response‑payload is leeg."""
+        await _publish("SecurityEventNotification", self.id, "1.6", **kw)
+        return _res16.SecurityEventNotification()
+
 
 # ---------------------------------------------------------------------------
-# OCPP 2.0.1
+# OCPP 2.0.1
 # ---------------------------------------------------------------------------
 class V201Handler(_BaseV201):
     """
-    Handler-set voor OCPP 2.0.1.
-    • Cachet alle NotifyReport-delen in `self.latest_config`
-    • Zet `self.notify_report_done` True zodra *tbc == False*
+    Handler‑set voor OCPP 2.0.1.
+    • Cachet alle NotifyReport‑delen in ``self.latest_config``
+    • Zet ``self.notify_report_done`` True zodra *tbc == False*
     """
 
     # ---------------- BootNotification
@@ -191,7 +206,7 @@ class V201Handler(_BaseV201):
             self.latest_config: List[Dict[str, Any]] = []
             self.notify_report_done = False  # type: ignore[attr-defined]
 
-        # Parse elk report-item
+        # Parse elk report‑item
         for entry in report_data:
             try:
                 name: str = entry["variable"]["name"]
@@ -212,7 +227,8 @@ class V201Handler(_BaseV201):
                     {
                         "key": name,
                         "value": best_attr.get("value"),
-                        "readonly": best_attr.get("mutability", "ReadOnly") == "ReadOnly",
+                        "readonly": best_attr.get("mutability", "ReadOnly")
+                        == "ReadOnly",
                         # extra velden voor debugging / UI
                         "mutability": best_attr.get("mutability"),
                         "persistent": best_attr.get("persistent"),
@@ -225,22 +241,25 @@ class V201Handler(_BaseV201):
                     }
                 )
             except Exception as exc:  # pragma: no cover
-                log.error("NotifyReport-parse error: %s", exc, exc_info=True)
+                log.error("NotifyReport‑parse error: %s", exc, exc_info=True)
 
         # laatste deel?
         if not tbc:
             self.notify_report_done = True  # type: ignore[attr-defined]
 
-        # ==== DEBUG-logging =================================================
+        # ==== DEBUG‑logging =================================================
         try:
             log.debug(
                 "[NotifyReport] CP=%s  seqNo=%s  tbc=%s  items=%s",
-                self.id, seq_no, tbc, len(report_data),
+                self.id,
+                seq_no,
+                tbc,
+                len(report_data),
             )
             if report_data:
                 log.debug(
                     "[NotifyReport] first item: %s",
-                    json.dumps(report_data[0], indent=2)[:400]
+                    json.dumps(report_data[0], indent=2)[:400],
                 )
         except Exception:  # pragma: no cover
             pass
@@ -255,3 +274,10 @@ class V201Handler(_BaseV201):
             generated_at=generated_at,
         )
         return _res201.NotifyReport()
+
+    # ---------------- SecurityEventNotification  ← NIEUW
+    @on("SecurityEventNotification")
+    async def on_security_event_notification(self, **kw: Any):
+        """Afhandeling van security‑events vanuit de CP (geen payload in resp.)."""
+        await _publish("SecurityEventNotification", self.id, "2.0.1", **kw)
+        return _res201.SecurityEventNotification()
