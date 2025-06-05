@@ -1,42 +1,35 @@
 """
-Thread-safe registries voor actieve connecties.
-
-Wijzigingen
------------
-• Alias-cache zodat een Charge Point zijn alias bewaart ook wanneer hij later
-  met een andere OCPP-versie opnieuw verbindt.
-• Public helper `remember_alias()` – wordt gebruikt door het REST-endpoint
-  `/set-alias`, maar kan ook elders worden aangeroepen.
+Thread-safe registries voor actieve connecties + alias-persistentie
+in Postgres.
 """
-
 from __future__ import annotations
 
 import asyncio
 from typing import Dict, List, Protocol, TypeVar, Generic
+
+from services.settings_repository import SettingsRepository   # ← nieuw import
 
 __all__ = [
     "ConnectionRegistryChargePoint",
     "ConnectionRegistryFrontend",
 ]
 
-# -------------------------------------------------------------------- helpers
+# ---------------- helper-interfaces ----------------
 class HasId(Protocol):
-    id: str            # unieke key in de registry
-    _settings: object  # voor ChargePointSession zit alias hierin
+    id: str
+    _settings: object
 
 
 T = TypeVar("T", bound=HasId)
 
 
-# -------------------------------------------------------------------- basis-registry
 class _ConnectionRegistryBase(Generic[T]):
-    """Asynchrone, thread-veilige dict 〈id → item〉 met simpele CRUD-helper­s."""
-
+    """Asynchrone, thread-veilige dict 〈id → item〉."""
     def __init__(self) -> None:
         self._items: Dict[str, T] = {}
         self._lock = asyncio.Lock()
 
-    # ........................................................ modifiers
+    # ---------- modifiers ----------
     async def register(self, item: T) -> None:
         async with self._lock:
             self._items[item.id] = item
@@ -45,7 +38,7 @@ class _ConnectionRegistryBase(Generic[T]):
         async with self._lock:
             self._items.pop(item.id, None)
 
-    # ........................................................ queries
+    # ---------- queries ------------
     async def get(self, item_id: str) -> T | None:
         async with self._lock:
             return self._items.get(item_id)
@@ -55,48 +48,70 @@ class _ConnectionRegistryBase(Generic[T]):
             return list(self._items.values())
 
 
-# -------------------------------------------------------------------- charge-point-registry
-class ConnectionRegistryChargePoint(_ConnectionRegistryBase["ChargePointSession"]):  # type: ignore[name-defined]
+# ================= Charge-Point registry =================
+class ConnectionRegistryChargePoint(      # type: ignore[name-defined]
+    _ConnectionRegistryBase["ChargePointSession"]
+):
     """
     Registry voor `ChargePointSession`-objecten.
-
-    Extra: alias-cache zodat de Friendly-Name behouden blijft over reconnects.
+    • Alias-cache wordt nu *persistent* bewaard in Postgres.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, repo: SettingsRepository) -> None:
         super().__init__()
+        self._repo = repo
         self._aliases: Dict[str, str | None] = {}
 
-    # ........................ alias-logic .............................
-    async def register(self, item: "ChargePointSession") -> None:      # type: ignore[name-defined]
+    # ----------- bootstrap (bij opstart) -------------
+    def preload_aliases(self, cache: Dict[str, str | None]) -> None:
+        self._aliases = cache.copy()
+
+    # ----------- alias-logic -------------------------
+    async def register(self, item: "ChargePointSession") -> None:      # type: ignore
         # alias uit cache injecteren vóór opslag
         if item.id in self._aliases:
             item._settings.alias = self._aliases[item.id]
         await super().register(item)
 
-    async def deregister(self, item: "ChargePointSession") -> None:    # type: ignore[name-defined]
-        # alias terugschrijven naar cache
+        # persist current settings
+        await self._repo.upsert(
+            item.id,
+            item._settings.alias,
+            item._settings.enabled,
+            item._settings.ocpp_version.value,
+        )
+
+    async def deregister(self, item: "ChargePointSession") -> None:    # type: ignore
         self._aliases[item.id] = item._settings.alias
         await super().deregister(item)
+        await self._repo.upsert(
+            item.id,
+            item._settings.alias,
+            item._settings.enabled,
+            item._settings.ocpp_version.value,
+        )
 
     async def remember_alias(self, cp_id: str, alias: str | None) -> None:
-        """
-        Opslaan/aanpassen van alias, ongeacht of er een live sessie is.
-        """
         async with self._lock:
             self._aliases[cp_id] = alias
-            # live sessie syncen
             sess = self._items.get(cp_id)
             if sess:
                 sess._settings.alias = alias
+            # → persist
+            await self._repo.upsert(
+                cp_id,
+                alias,
+                sess._settings.enabled if sess else False,
+                sess._settings.ocpp_version.value if sess else "1.6",
+            )
 
 
-# -------------------------------------------------------------------- front-end-registry
+# ================= Front-end registry ====================
 class _WsLike(Protocol):
     async def send_text(self, data: str) -> None: ...
     async def close(self, code: int | None = None) -> None: ...
 
 
-class ConnectionRegistryFrontend(_ConnectionRegistryBase[_WsLike]):  # type: ignore[type-var]
-    """Registry voor open FE-WebSockets."""
+class ConnectionRegistryFrontend(_ConnectionRegistryBase[_WsLike]):   # type: ignore[type-var]
+    """Registry voor open FE-sockets."""
     pass

@@ -14,15 +14,17 @@ services:
     volumes:
       - .:/app
 
-    # ↔︎  Influx-config uit env (kan je eenvoudig wisselen)
+    # ↔︎  Config uit env (Influx & Postgres)
     environment:
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=my-token
       - INFLUX_ORG=v2x_org
       - INFLUX_BUCKET=v2x_bucket
+      - POSTGRES_DSN=postgresql://v2x:v2xpw@v2x_postgres:5432/v2x_db
 
     depends_on:
       - influxdb
+      - v2x_postgres
 
     command: >
       uvicorn main:app --host 0.0.0.0 --port 5062 --reload
@@ -43,5 +45,34 @@ services:
     volumes:
       - influxdb_data:/var/lib/influxdb2
 
+  v2x_postgres:
+    image: postgres:15
+    container_name: v2x-postgres
+    restart: unless-stopped
+    ports:
+      - "55432:5432"      # hostpoort 55432 → containerpoort 5432
+    environment:
+      - POSTGRES_USER=v2x
+      - POSTGRES_PASSWORD=v2xpw
+      - POSTGRES_DB=v2x_db
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: v2x-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"         # web-ui → http://localhost:5050
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=ja.vandam3@student.avans.nl
+      - PGADMIN_DEFAULT_PASSWORD=adminadmin
+    depends_on:
+      - v2x_postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin  # pgadmin instellingen persistent
+
 volumes:
   influxdb_data:
+  pg_data:
+  pgadmin_data:

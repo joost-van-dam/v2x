@@ -69,3 +69,37 @@ influxdb
 http://localhost:8086
 login: admin
 password: adminadmin
+
+
+3. Inloggen op PgAdmin
+
+    Open http://localhost:5050
+    (gebruik het e-mailadres en wachtwoord uit de env-vars hierboven)
+
+    Create Server → tab Connection
+
+        Host name: v2x_postgres
+
+        Port: 5432
+
+        Username: v2x
+
+        Password: v2xpw
+
+    Opslaan – je ziet nu alle tabellen en kunt data browsen of queries uitvoeren.
+
+
+
+    # Laat alle meta-settings zien (handig!)
+\set
+
+# Toon query-resultaat als verticale records (fijn bij brede tabellen)
+\x on   -- of  \x auto
+
+# Resultaat wegschrijven naar CSV
+\copy (SELECT * FROM charge_point_settings) TO 'settings.csv' CSV HEADER
+
+
+
+handige commands:
+docker-compose ps

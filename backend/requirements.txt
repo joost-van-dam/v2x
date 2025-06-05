@@ -5,8 +5,11 @@ pydantic            # dataclass-achtig, maar met validatie
 ocpp                # voor v1.6 & v2.0.1 parsing
 influxdb-client
 
+asyncpg>=0.29,<1.0    
+
 # Test dependencies
 httpx               # benodigd door starlette.testclient
 pytest
 pytest-asyncio
 pytest-cov          # coverage
+
