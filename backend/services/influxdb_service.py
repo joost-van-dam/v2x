@@ -14,14 +14,13 @@ log = logging.getLogger("InfluxDBService")
 
 class InfluxDBService:
     """
-    Luistert op *alle* EventBus-events en schrijft ze naar InfluxDB 2.x
-    in bucket **v2x_bucket**.  MeterValues en ConfigurationChanged krijgen
-    een wat uitgebreidere parsing zodat je straks mooie grafieken kunt
-    maken per laadpaal.
+    Luistert op alle EventBus-events en schrijft ze naar InfluxDB.
+    – MeterValues  → per sampled_value een punt (numeriek ‘value’-veld)
+    – ConfigurationChanged → numeriek of string, eigen measurement
+    – Alle overige events → alleen veld ‘count’ = 1 (geen strings!)
     """
 
     _EVENTS: List[str] = [
-        # core + extra
         "MeterValues",
         "Heartbeat",
         "StatusNotification",
@@ -36,7 +35,7 @@ class InfluxDBService:
         "SecurityEventNotification",
     ]
 
-    # ------------------------------------------------------------------ init
+    # -------------------------------------------------------------- init
     def __init__(self) -> None:
         s = settings()
 
@@ -45,16 +44,15 @@ class InfluxDBService:
         )
         self._write = self._client.write_api(write_options=SYNCHRONOUS)
 
-        # abonnementen op alle events
         for evt in self._EVENTS:
             bus.subscribe(evt, self._make_handler(evt))
 
         log.info(
-            "InfluxDBService ready → writing to %s (org=%s, bucket=%s)",
+            "InfluxDBService ready → %s (org=%s, bucket=%s)",
             s.INFLUX_URL, s.INFLUX_ORG, s.INFLUX_BUCKET
         )
 
-    # ---------------------------------------------------------------- helpers
+    # ------------------------------------------------------ handlers
     def _make_handler(self, evt_name: str):
         async def _handler(**payload):
             try:
@@ -64,50 +62,50 @@ class InfluxDBService:
 
         return _handler
 
-    # ---------------------------------------------------------------- writer
     async def _process_event(self, event: str, **payload) -> None:
         cp_id: str = payload.get("charge_point_id", "")
-        occp_version: str = payload.get("ocpp_version", "")
+        ocpp_version: str = payload.get("ocpp_version", "")
         body: Dict[str, Any] = payload.get("payload", payload)
 
         if event == "MeterValues":
-            await self._handle_meter_values(cp_id, occp_version, body)
+            await self._handle_meter_values(cp_id, ocpp_version, body)
             return
 
         if event == "ConfigurationChanged":
             await self._handle_config_change(cp_id, body)
             return
 
-        # generic fallback – plaatst hele payload als JSON-string
+        # --- generieke events: alleen numeriek veld ‘count’ ----------------
         point = (
             Point(event)
             .tag("cp_id", cp_id)
-            .tag("ocpp", occp_version)
-            .field("data", json.dumps(body))
+            .tag("ocpp", ocpp_version)
+            .field("count", 1)
             .time(datetime.now(timezone.utc), WritePrecision.NS)
         )
+        # Wil je tóch de ruwe payload bewaren?  Zet de volgende regel aan:
+        # point.tag("raw", json.dumps(body)[:250])   # max 250 chars als tag
+
         self._write.write(bucket=settings().INFLUX_BUCKET, record=point)
 
-    # ---------------------------------------------------- specialised events
+    # ------------------------------------------------ MeterValues
     async def _handle_meter_values(
-        self, cp_id: str, occp_version: str, body: Dict[str, Any]
+        self, cp_id: str, ocpp_version: str, body: Dict[str, Any]
     ) -> None:
         connector = body.get("connector_id")
         for mv in body.get("meter_value", []):
             ts = _iso_to_datetime(mv.get("timestamp"))
             for sv in mv.get("sampled_value", []):
-                value_raw = sv.get("value")
                 try:
-                    value_num = float(value_raw)
+                    value_num = float(sv.get("value"))
                 except (TypeError, ValueError):
-                    # niet-numeriek → skip (grafieken hebben nummers nodig)
-                    continue
+                    continue  # skip non-numeric
 
                 point = (
                     Point("meter_value")
                     .tag("cp_id", cp_id)
                     .tag("connector", str(connector))
-                    .tag("measurand", sv.get("measurand", "Unknown"))
+                    .tag("measurand", sv.get("measurand", ""))
                     .tag("phase", sv.get("phase", ""))
                     .tag("location", sv.get("location", ""))
                     .tag("unit", sv.get("unit", ""))
@@ -116,37 +114,31 @@ class InfluxDBService:
                 )
                 self._write.write(bucket=settings().INFLUX_BUCKET, record=point)
 
+    # ------------------------------------------------ ConfigurationChanged
     async def _handle_config_change(
         self, cp_id: str, body: Dict[str, Any]
     ) -> None:
-        params = body.get("parameters", {})
-        key = params.get("key")
-        val_raw = params.get("value")
+        p = body.get("parameters", {})
+        key = p.get("key")
+        raw_val = p.get("value")
+
+        point = (
+            Point("configuration_change")
+            .tag("cp_id", cp_id)
+            .tag("key", key)
+            .time(datetime.now(timezone.utc), WritePrecision.NS)
+        )
+
         try:
-            val = float(val_raw)
+            point.field("value", float(raw_val))
         except (TypeError, ValueError):
-            # prima om als string te bewaren voor non-numerieke waarden
-            point = (
-                Point("configuration_change")
-                .tag("cp_id", cp_id)
-                .tag("key", key)
-                .field("value_str", str(val_raw))
-                .time(datetime.now(timezone.utc), WritePrecision.NS)
-            )
-        else:
-            point = (
-                Point("configuration_change")
-                .tag("cp_id", cp_id)
-                .tag("key", key)
-                .field("value", val)
-                .time(datetime.now(timezone.utc), WritePrecision.NS)
-            )
+            point.field("value_str", str(raw_val))
+
         self._write.write(bucket=settings().INFLUX_BUCKET, record=point)
 
 
-# ---------------------------------------------------------------- utilities
+# ---------------------------------------------------------- utils
 def _iso_to_datetime(iso_str: str | None) -> datetime:
-    """ISO → `datetime`, fallback naar *nu* bij ongeldige input."""
     if not iso_str:
         return datetime.now(timezone.utc)
     try:
