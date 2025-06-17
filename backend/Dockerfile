@@ -1,10 +1,9 @@
 # --------------------------------------------------------------
 # CSMS backend – container-image
 # --------------------------------------------------------------
-#  • gebaseerd op Python 3.12 (slim)
+#  • gebaseerd op Python 3.12-slim
 #  • installeert alle requirements
 #  • draait als non-root gebruiker
-#  • kopieert alléén de strikt noodzakelijke bronnen
 # --------------------------------------------------------------
 
     FROM python:3.12-slim AS runtime
@@ -14,9 +13,7 @@
         PYTHONDONTWRITEBYTECODE=1 \
         PIP_NO_CACHE_DIR=1
     
-    # --------------------------------------------------------------
-    # Maak een niet-privileged gebruiker aan
-    # --------------------------------------------------------------
+    # Niet-privileged user aanmaken
     RUN adduser --disabled-password --gecos '' --home /app appuser
     
     WORKDIR /app
@@ -26,12 +23,10 @@
     RUN pip install --no-cache-dir -r requirements.txt
     
     # ---------------- codebase
-    # Kopieer alleen de benodigde app-bronbestanden; alles dat niet nodig is
-    # (bijv. .git, tests, secrets) hoort in .dockerignore uitgesloten te zijn.
-    COPY --chown=appuser:appuser ./app ./app
-    COPY --chown=appuser:appuser ./main.py .
+    # Kopieer álles wat niet is uitgesloten via .dockerignore
+    COPY --chown=appuser:appuser . .
     
-    # Draai de container als on-privileged gebruiker
+    # Draai container als non-root
     USER appuser
     
     EXPOSE 5062
