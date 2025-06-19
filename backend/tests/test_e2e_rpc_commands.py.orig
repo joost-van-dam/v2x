@@ -109,7 +109,6 @@ def cp4_session(client):
 # ───────────────────────────────────────────────────────────────
 #                              TESTS
 # ───────────────────────────────────────────────────────────────
-
 def test_list_before_and_after_connect(client, cp4_session):
     r = client.get("/api/v1/get-all-charge-points")
     assert r.status_code == 200
@@ -122,6 +121,7 @@ def test_list_before_and_after_connect(client, cp4_session):
     r = client.get("/api/v1/get-all-charge-points?active=true")
     assert r.status_code == 200
     assert r.json()["connected"] == []
+
 
 def test_set_alias_and_get_settings(client, cp4_session):
     r = client.put(
@@ -136,9 +136,6 @@ def test_set_alias_and_get_settings(client, cp4_session):
     data = r.json()
     assert data["alias"] == "MyChargPoint"
     assert data["active"] is False
-
-
-@pytest.mark.tc("TC-E03")
 
 
 def test_enable_disable_and_settings(client):
@@ -158,6 +155,7 @@ def test_enable_disable_and_settings(client):
     assert r.status_code == 200
     assert r.json()["active"] is False
 
+
 def test_remote_start_and_stop_via_http(client):
     # Remote start
     r = client.post("/api/v1/charge-points/CP-4/start")
@@ -168,6 +166,7 @@ def test_remote_start_and_stop_via_http(client):
     r = client.post("/api/v1/charge-points/CP-4/stop")
     assert r.status_code == 202
     assert r.json()["status"] == "Accepted"
+
 
 def test_configuration_via_http(client):
     r = client.get("/api/v1/charge-points/CP-4/configuration")

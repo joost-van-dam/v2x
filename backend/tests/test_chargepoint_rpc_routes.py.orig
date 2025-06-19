@@ -354,8 +354,6 @@ def test_list_cps_filters_and_all(client, registry):
     ids = {item["id"] for item in response.json()["connected"]}
     assert "cp201" in ids and "cp16" not in ids
 
-@pytest.mark.tc("TC-U12")
-
 def test_invalid_paths_return_404(client):
     # Elke andere route → 404
     response = client.get("/nonexistent/path")

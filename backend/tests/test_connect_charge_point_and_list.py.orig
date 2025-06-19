@@ -26,8 +26,6 @@ def test_root_and_empty_list(client):
     assert r.status_code == 200
     assert r.json() == {"connected": []}
 
-@pytest.mark.tc("TC-I01")
-
 def test_charge_point_connect_and_list(client):
     # Open WS-verbinding met subprotocol voor OCPP 1.6
     with client.websocket_connect(

@@ -35,9 +35,6 @@ def v16_strategy():
     return V16CommandStrategy()
 
 
-@pytest.mark.tc("TC-U16")
-
-
 def test_v16_remote_start_default(v16_strategy):
     action = "RemoteStartTransaction"
     params: Dict[str, Any] = {}

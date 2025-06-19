@@ -120,8 +120,6 @@ def test_status_notification(ws):
     # de CALLRESULT heeft geen payload behalve lege {} 
     assert isinstance(resp[2], dict)
 
-@pytest.mark.tc("TC-E04")
-
 def test_meter_values(ws):
     # MeterValues
     sample_meter = {
